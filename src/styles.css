@@ -66,6 +66,8 @@ button:disabled { cursor: not-allowed; }
 .app-shell[data-theme="dark"] .navigation-item { color: #aab3c1; }
 .app-shell[data-theme="dark"] .navigation-item:hover { background: #191e27; }
 .app-shell[data-theme="dark"] .navigation-item.is-active { background: #162848; color: #8db9ff; }
+.app-shell[data-theme="dark"] .icon-button { color: #b8c2d1; }
+.app-shell[data-theme="dark"] .stage-muted { color: #aeb9c9; }
 .app-shell[data-theme="dark"] .owner-profile span,
 .app-shell[data-theme="dark"] .owner-profile .icon,
 .app-shell[data-theme="dark"] .review-meta,

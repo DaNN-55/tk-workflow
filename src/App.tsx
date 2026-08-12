@@ -146,7 +146,7 @@ export function App() {
   const [seriesFilter, setSeriesFilter] = useState("全部系列");
   const [timelines, setTimelines] = useState<Record<string, TimelineEntry[]>>({
     "EP-102": [
-      { label: "脚本已提交", actor: "内容 Worker", time: "今天 10:42", tone: "review" },
+      { label: "脚本已提交", actor: "内容工作者", time: "今天 10:42", tone: "review" },
       { label: "大纲已通过", actor: "Dan（所有者）", time: "昨天 15:27", tone: "neutral" },
       { label: "生产单已创建", actor: "Dan（所有者）", time: "昨天 09:02", tone: "neutral" },
     ],
