@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { Database, Json } from "./lib/database.types";
 import { supabase } from "./lib/supabase";
-import { defaultBlueprintPolicy, parseBlueprintPolicy } from "./platform/blueprintPolicy";
+import { blueprintAssetRoot, defaultBlueprintPolicy, parseBlueprintPolicy, withBlueprintAssetRoot } from "./platform/blueprintPolicy";
 import type { EpisodeStage } from "./platform/types";
 
 type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
@@ -73,6 +73,10 @@ function policyPositioning(policy: Json) {
     return typeof policy.positioning === "string" && policy.positioning ? policy.positioning : "尚未填写定位";
   }
   return "尚未填写定位";
+}
+
+function policyAssetRoot(policy: Json) {
+  return blueprintAssetRoot(policy) || "尚未配置";
 }
 
 async function loadWorkspace(): Promise<Workspace> {
@@ -399,19 +403,20 @@ function BootstrapScreen({ errorMessage, isPending, onSubmit }: { errorMessage: 
   const [slug, setSlug] = useState("");
   const [timezone, setTimezone] = useState("Asia/Shanghai");
   const [policy, setPolicy] = useState(formatPolicy(defaultBlueprintPolicy));
+  const [assetRoot, setAssetRoot] = useState(blueprintAssetRoot(defaultBlueprintPolicy));
   const [formError, setFormError] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
       setFormError("");
-      await onSubmit({ name, slug, timezone, policy: parseBlueprintPolicy(policy) });
+      await onSubmit({ name, slug, timezone, policy: withBlueprintAssetRoot(parseBlueprintPolicy(policy), assetRoot) });
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "蓝图规则无法解析。");
     }
   }
 
-  return <main className="access-shell"><section className="access-card bootstrap-card"><div className="wordmark">Loop 控制台</div><h1>初始化首个账号</h1><p>这会创建你的所有者成员资格与蓝图 v1。后续账号、蓝图和生产单都会通过受控接口创建。</p><form onSubmit={submit}><label>账号名称<input onChange={(event) => setName(event.target.value)} placeholder="例如：道工作室" required value={name} /></label><label>账号标识<input onChange={(event) => setSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="dao-studio" required value={slug} /></label><label>时区<input onChange={(event) => setTimezone(event.target.value)} required value={timezone} /></label><label>蓝图规则（JSON）<textarea onChange={(event) => setPolicy(event.target.value)} rows={10} value={policy} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "初始化中…" : "创建首个账号"}</button></form>{formError || errorMessage ? <p className="form-error">{formError || errorMessage}</p> : null}</section></main>;
+  return <main className="access-shell"><section className="access-card bootstrap-card"><div className="wordmark">Loop 控制台</div><h1>初始化首个账号</h1><p>这会创建你的所有者成员资格与蓝图 v1。后续账号、蓝图和生产单都会通过受控接口创建。</p><form onSubmit={submit}><label>账号名称<input onChange={(event) => setName(event.target.value)} placeholder="例如：道工作室" required value={name} /></label><label>账号标识<input onChange={(event) => setSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="dao-studio" required value={slug} /></label><label>时区<input onChange={(event) => setTimezone(event.target.value)} required value={timezone} /></label><label>资产目录<input aria-label="资产目录" onChange={(event) => setAssetRoot(event.target.value)} placeholder="例如：/Volumes/素材盘/tk-workflow/dao" value={assetRoot} /></label><p className="form-hint">路径由运行 Worker 的电脑验证；Windows 可填写如 D:\\tk-workflow\\dao。</p><label>蓝图规则（JSON）<textarea onChange={(event) => setPolicy(event.target.value)} rows={10} value={policy} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "初始化中…" : "创建首个账号"}</button></form>{formError || errorMessage ? <p className="form-error">{formError || errorMessage}</p> : null}</section></main>;
 }
 
 function LoadingScreen() { return <main className="access-shell"><div className="loading-mark">正在连接受控平台…</div></main>; }
@@ -419,10 +424,40 @@ function ErrorScreen({ errorMessage, onRetry }: { errorMessage: string; onRetry:
 
 function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate, onCreateBlueprint, onSelectAccount }: { account: Account | null; accounts: Account[]; blueprints: Blueprint[]; isPending: string; onActivate: (id: string) => Promise<void>; onCreateBlueprint: (policy: Json) => Promise<void>; onSelectAccount: (id: string) => void }) {
   const [policy, setPolicy] = useState("");
+  const [assetRoot, setAssetRoot] = useState("");
   const [formError, setFormError] = useState("");
-  useEffect(() => { setPolicy(account ? formatPolicy(blueprints.find((blueprint) => blueprint.id === account.current_blueprint_version_id)?.policy ?? defaultBlueprintPolicy) : ""); }, [account, blueprints]);
+  const activePolicy = account ? blueprints.find((blueprint) => blueprint.id === account.current_blueprint_version_id)?.policy ?? defaultBlueprintPolicy : defaultBlueprintPolicy;
+
+  useEffect(() => {
+    if (!account) {
+      setPolicy("");
+      setAssetRoot("");
+      return;
+    }
+    setPolicy(formatPolicy(activePolicy));
+    setAssetRoot(blueprintAssetRoot(activePolicy));
+  }, [account, activePolicy]);
+
+  function updatePolicy(source: string) {
+    setPolicy(source);
+    try {
+      setAssetRoot(blueprintAssetRoot(parseBlueprintPolicy(source)));
+    } catch {
+      // 保留目录输入，直到用户修复 JSON 后再保存。
+    }
+  }
+
+  function createConfiguredBlueprint() {
+    try {
+      setFormError("");
+      void onCreateBlueprint(withBlueprintAssetRoot(parseBlueprintPolicy(policy), assetRoot));
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "规则无法解析。");
+    }
+  }
+
   if (!account) return <div className="empty-state">没有可读取的账号。</div>;
-  return <><div className="account-selector"><label>当前账号<select onChange={(event) => onSelectAccount(event.target.value)} value={account.id}>{accounts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><p>{policyPositioning(blueprints.find((blueprint) => blueprint.id === account.current_blueprint_version_id)?.policy ?? defaultBlueprintPolicy)}</p></div><div className="account-layout"><section className="blueprint-list"><h2>蓝图版本</h2>{blueprints.map((blueprint) => <article className={`blueprint-card ${blueprint.is_active ? "is-active" : ""}`} key={blueprint.id}><div><strong>v{blueprint.version}</strong><span>{blueprint.is_active ? "当前生效" : "待激活"}</span></div><p>{policyPositioning(blueprint.policy)}</p>{blueprint.is_active ? null : <button className="button button-secondary" disabled={isPending === `activate-${blueprint.id}`} onClick={() => void onActivate(blueprint.id)} type="button">激活此版本</button>}</article>)}</section><section className="blueprint-editor"><h2>新建蓝图版本</h2><p>新版本不会影响已创建的生产单；激活后只用于新生产单。</p><textarea aria-label="新蓝图规则" onChange={(event) => setPolicy(event.target.value)} rows={14} value={policy} /><button className="button button-primary" disabled={isPending === "blueprint"} onClick={() => { try { setFormError(""); void onCreateBlueprint(parseBlueprintPolicy(policy)); } catch (error) { setFormError(error instanceof Error ? error.message : "规则无法解析。") } }} type="button">{isPending === "blueprint" ? "创建中…" : "创建版本"}</button>{formError ? <p className="form-error">{formError}</p> : null}</section></div></>;
+  return <><div className="account-selector"><label>当前账号<select onChange={(event) => onSelectAccount(event.target.value)} value={account.id}>{accounts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><p>{policyPositioning(activePolicy)}<br />资产目录：{policyAssetRoot(activePolicy)}</p></div><div className="account-layout"><section className="blueprint-list"><h2>蓝图版本</h2>{blueprints.map((blueprint) => <article className={`blueprint-card ${blueprint.is_active ? "is-active" : ""}`} key={blueprint.id}><div><strong>v{blueprint.version}</strong><span>{blueprint.is_active ? "当前生效" : "待激活"}</span></div><p>{policyPositioning(blueprint.policy)}<br />资产目录：{policyAssetRoot(blueprint.policy)}</p>{blueprint.is_active ? null : <button className="button button-secondary" disabled={isPending === `activate-${blueprint.id}`} onClick={() => void onActivate(blueprint.id)} type="button">激活此版本</button>}</article>)}</section><section className="blueprint-editor"><h2>资产目录与蓝图</h2><p>目录由运行 Worker 的本机验证。保存会创建新蓝图版本；激活后才用于之后新建的生产单，历史生产单不变。</p><label>资产目录<input aria-label="资产目录" onChange={(event) => setAssetRoot(event.target.value)} placeholder="例如：/Volumes/素材盘/tk-workflow/dao" value={assetRoot} /></label><p className="field-hint">可填写 macOS、Windows 或 Linux 的本机目录。浏览器不会读取这个目录。</p><label>蓝图规则（JSON）<textarea aria-label="新蓝图规则" onChange={(event) => updatePolicy(event.target.value)} rows={14} value={policy} /></label><button className="button button-primary" disabled={isPending === "blueprint"} onClick={createConfiguredBlueprint} type="button">{isPending === "blueprint" ? "创建中…" : "保存为新版本"}</button>{formError ? <p className="form-error">{formError}</p> : null}</section></div></>;
 }
 
 function EpisodeWorkspace({ accounts, accountsById, artifacts, blueprintsById, currentNavigation, episodes, filter, onFilter, onSelectEpisode, selectedEpisode }: { accounts: Account[]; accountsById: Map<string, Account>; artifacts: Artifact[]; blueprintsById: Map<string, Blueprint>; currentNavigation: NavigationItem; episodes: Episode[]; filter: string; onFilter: (value: string) => void; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
@@ -450,19 +485,20 @@ function AccountForm({ isPending, onClose, onSubmit }: { isPending: boolean; onC
   const [slug, setSlug] = useState("");
   const [timezone, setTimezone] = useState("Asia/Shanghai");
   const [policy, setPolicy] = useState(formatPolicy(defaultBlueprintPolicy));
+  const [assetRoot, setAssetRoot] = useState(blueprintAssetRoot(defaultBlueprintPolicy));
   const [formError, setFormError] = useState("");
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     try {
       setFormError("");
-      await onSubmit({ name, slug, timezone, policy: parseBlueprintPolicy(policy) });
+      await onSubmit({ name, slug, timezone, policy: withBlueprintAssetRoot(parseBlueprintPolicy(policy), assetRoot) });
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "蓝图规则无法解析。");
     }
   }
 
-  return <div className="modal-backdrop" role="presentation"><form aria-label="新建账号" className="modal-card" onSubmit={submit}><header><div><h2>新建账号</h2><p>将创建独立的蓝图 v1；生产单、审批和审计记录互相隔离。</p></div><button aria-label="关闭新建账号" className="icon-button" onClick={onClose} type="button"><Icon name="Close" /></button></header><label>账号名称<input autoFocus onChange={(event) => setName(event.target.value)} placeholder="例如：道工作室 2" required value={name} /></label><label>账号标识<input onChange={(event) => setSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="dao-studio-2" required value={slug} /></label><label>时区<input onChange={(event) => setTimezone(event.target.value)} required value={timezone} /></label><label>蓝图规则（JSON）<textarea onChange={(event) => setPolicy(event.target.value)} rows={8} value={policy} /></label><div className="modal-actions"><button className="button button-secondary" onClick={onClose} type="button">取消</button><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "创建中…" : "创建账号"}</button></div>{formError ? <p className="form-error">{formError}</p> : null}</form></div>;
+  return <div className="modal-backdrop" role="presentation"><form aria-label="新建账号" className="modal-card" onSubmit={submit}><header><div><h2>新建账号</h2><p>将创建独立的蓝图 v1；生产单、审批和审计记录互相隔离。</p></div><button aria-label="关闭新建账号" className="icon-button" onClick={onClose} type="button"><Icon name="Close" /></button></header><label>账号名称<input autoFocus onChange={(event) => setName(event.target.value)} placeholder="例如：道工作室 2" required value={name} /></label><label>账号标识<input onChange={(event) => setSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="dao-studio-2" required value={slug} /></label><label>时区<input onChange={(event) => setTimezone(event.target.value)} required value={timezone} /></label><label>资产目录<input aria-label="资产目录" onChange={(event) => setAssetRoot(event.target.value)} placeholder="例如：/Volumes/素材盘/tk-workflow/dao-2" value={assetRoot} /></label><p className="form-hint">目录不会上传；Worker 会在本机验证它。</p><label>蓝图规则（JSON）<textarea onChange={(event) => setPolicy(event.target.value)} rows={8} value={policy} /></label><div className="modal-actions"><button className="button button-secondary" onClick={onClose} type="button">取消</button><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "创建中…" : "创建账号"}</button></div>{formError ? <p className="form-error">{formError}</p> : null}</form></div>;
 }
 
 function PasswordForm({ isPending, onClose, onSubmit }: { isPending: boolean; onClose: () => void; onSubmit: (password: string) => Promise<void> }) {

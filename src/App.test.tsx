@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import { defaultBlueprintPolicy, parseBlueprintPolicy } from "./platform/blueprintPolicy";
+import { defaultBlueprintPolicy, parseBlueprintPolicy, withBlueprintAssetRoot } from "./platform/blueprintPolicy";
 
 vi.mock("./lib/supabase", () => ({
   supabase: {
@@ -26,5 +26,12 @@ describe("approval console", () => {
   it("accepts the default blueprint policy and rejects a non-object policy", () => {
     expect(parseBlueprintPolicy(JSON.stringify(defaultBlueprintPolicy))).toEqual(defaultBlueprintPolicy);
     expect(() => parseBlueprintPolicy("[]")).toThrow("蓝图规则必须是 JSON 对象。");
+  });
+
+  it("updates only the asset root in a blueprint policy", () => {
+    expect(withBlueprintAssetRoot(defaultBlueprintPolicy, "/Volumes/Content Disk/tk-workflow/dao")).toEqual({
+      ...defaultBlueprintPolicy,
+      asset_root: "/Volumes/Content Disk/tk-workflow/dao",
+    });
   });
 });

@@ -15,3 +15,16 @@ export function parseBlueprintPolicy(source: string): Json {
 
   return parsed as Json;
 }
+
+export function blueprintAssetRoot(policy: Json): string {
+  if (!policy || Array.isArray(policy) || typeof policy !== "object") return "";
+  return typeof policy.asset_root === "string" ? policy.asset_root : "";
+}
+
+export function withBlueprintAssetRoot(policy: Json, assetRoot: string): Json {
+  if (!policy || Array.isArray(policy) || typeof policy !== "object") {
+    throw new Error("蓝图规则必须是 JSON 对象。");
+  }
+
+  return { ...policy, asset_root: assetRoot.trim() };
+}
