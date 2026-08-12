@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "check": "tsc -b --pretty false",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "worker:build": "tsc -p tsconfig.worker.json",
+    "worker:run": "npm run worker:build && node dist/worker/worker/codexWorkerCli.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
