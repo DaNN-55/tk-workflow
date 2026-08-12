@@ -25,13 +25,14 @@ create table public.account_blueprint_versions (
   policy jsonb not null,
   is_active boolean not null default false,
   created_at timestamptz not null default now(),
-  unique (account_id, version)
+  unique (account_id, version),
+  unique (account_id, id)
 );
 
 alter table public.accounts
   add constraint accounts_current_blueprint_version_fk
-  foreign key (current_blueprint_version_id)
-  references public.account_blueprint_versions(id);
+  foreign key (id, current_blueprint_version_id)
+  references public.account_blueprint_versions(account_id, id);
 
 create table public.account_memberships (
   account_id uuid not null references public.accounts(id) on delete cascade,
@@ -43,12 +44,18 @@ create table public.account_memberships (
 create table public.episodes (
   id uuid primary key default gen_random_uuid(),
   account_id uuid not null references public.accounts(id) on delete restrict,
-  blueprint_version_id uuid not null references public.account_blueprint_versions(id) on delete restrict,
+  blueprint_version_id uuid not null,
   title text not null check (char_length(trim(title)) > 0),
   stage public.episode_stage not null default 'brief_draft',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+alter table public.episodes
+  add constraint episodes_blueprint_belongs_to_account_fk
+  foreign key (account_id, blueprint_version_id)
+  references public.account_blueprint_versions(account_id, id)
+  on delete restrict;
 
 create table public.tasks (
   id uuid primary key default gen_random_uuid(),
@@ -204,6 +211,59 @@ as $$
   );
 $$;
 
+create function public.has_required_artifacts(p_episode_id uuid, p_to_stage public.episode_stage)
+returns boolean
+language sql
+stable
+set search_path = public
+as $$
+  select case p_to_stage
+    when 'script_approved'::public.episode_stage then exists (
+      select 1 from public.artifacts
+      where episode_id = p_episode_id and artifact_type = 'script'
+    )
+    when 'visual_approved'::public.episode_stage then exists (
+      select 1 from public.artifacts
+      where episode_id = p_episode_id and artifact_type = 'visual_brief'
+    )
+    when 'storyboard_approved'::public.episode_stage then exists (
+      select 1 from public.artifacts
+      where episode_id = p_episode_id and artifact_type = 'storyboard'
+    )
+    when 'qc_passed'::public.episode_stage then exists (
+      select 1 from public.artifacts
+      where episode_id = p_episode_id and artifact_type = 'render'
+    )
+    else true
+  end;
+$$;
+
+create function public.create_episode(p_account_id uuid, p_blueprint_version_id uuid, p_title text)
+returns public.episodes
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  created_episode public.episodes;
+  membership_role public.member_role;
+begin
+  select role into membership_role from public.account_memberships
+  where account_id = p_account_id and user_id = auth.uid();
+  if membership_role is distinct from 'owner' then
+    raise exception 'Owner membership is required to create an episode' using errcode = '42501';
+  end if;
+  insert into public.episodes (account_id, blueprint_version_id, title)
+  values (p_account_id, p_blueprint_version_id, p_title)
+  returning * into created_episode;
+  insert into public.tasks (episode_id, task_type, input_snapshot)
+  values (created_episode.id, 'draft_brief', jsonb_build_object('account_id', p_account_id, 'blueprint_version_id', p_blueprint_version_id));
+  insert into public.audit_events (account_id, episode_id, event_type, payload, actor_id)
+  values (p_account_id, created_episode.id, 'episode_created', jsonb_build_object('blueprint_version_id', p_blueprint_version_id), auth.uid());
+  return created_episode;
+end;
+$$;
+
 create function public.transition_episode(p_episode_id uuid, p_to_stage public.episode_stage, p_reason text)
 returns public.episodes
 language plpgsql
@@ -232,10 +292,20 @@ begin
   if p_to_stage = any(owner_only_stages) and membership_role <> 'owner' then
     raise exception 'Owner approval is required for %', p_to_stage using errcode = '42501';
   end if;
+  if not public.has_required_artifacts(p_episode_id, p_to_stage) then
+    raise exception 'Required artifacts are missing for %', p_to_stage using errcode = '22023';
+  end if;
   previous_stage := current_episode.stage;
   update public.episodes set stage = p_to_stage, updated_at = now() where id = p_episode_id returning * into current_episode;
   insert into public.state_transitions (episode_id, from_stage, to_stage, reason, actor_id)
   values (p_episode_id, previous_stage, p_to_stage, p_reason, auth.uid());
+  if p_to_stage = any(owner_only_stages) then
+    insert into public.approvals (episode_id, stage, decision, reason, actor_id)
+    values (p_episode_id, p_to_stage, 'approved', p_reason, auth.uid());
+  elsif previous_stage in ('script_review', 'visual_review', 'storyboard_review', 'qc_review', 'publishing_review') then
+    insert into public.approvals (episode_id, stage, decision, reason, actor_id)
+    values (p_episode_id, previous_stage, 'changes_requested', p_reason, auth.uid());
+  end if;
   insert into public.audit_events (account_id, episode_id, event_type, payload, actor_id)
   values (current_episode.account_id, p_episode_id, 'stage_transition', jsonb_build_object('to_stage', p_to_stage, 'reason', p_reason), auth.uid());
   return current_episode;

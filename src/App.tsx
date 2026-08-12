@@ -135,11 +135,13 @@ export function App() {
   const [selectedId, setSelectedId] = useState("EP-102");
   const [accountFilter, setAccountFilter] = useState("All accounts");
   const [seriesFilter, setSeriesFilter] = useState("All series");
-  const [timeline, setTimeline] = useState<TimelineEntry[]>([
-    { label: "Script submitted", actor: "Content Worker", time: "Today, 10:42 AM", tone: "review" },
-    { label: "Outline approved", actor: "Dan Owner", time: "Yesterday, 3:27 PM", tone: "neutral" },
-    { label: "Episode created", actor: "Dan Owner", time: "Yesterday, 9:02 AM", tone: "neutral" },
-  ]);
+  const [timelines, setTimelines] = useState<Record<string, TimelineEntry[]>>({
+    "EP-102": [
+      { label: "Script submitted", actor: "Content Worker", time: "Today, 10:42 AM", tone: "review" },
+      { label: "Outline approved", actor: "Dan Owner", time: "Yesterday, 3:27 PM", tone: "neutral" },
+      { label: "Episode created", actor: "Dan Owner", time: "Yesterday, 9:02 AM", tone: "neutral" },
+    ],
+  });
 
   const selectedEpisode = episodes.find((episode) => episode.id === selectedId) ?? episodes[0];
   const accounts = useMemo(
@@ -166,10 +168,13 @@ export function App() {
           : episode,
       ),
     );
-    setTimeline((current) => [
-      { label, actor: "Dan Owner", time: "Just now", tone },
+    setTimelines((current) => ({
       ...current,
-    ]);
+      [selectedEpisode.id]: [
+        { label, actor: "Dan Owner", time: "Just now", tone },
+        ...(current[selectedEpisode.id] ?? []),
+      ],
+    }));
   }
 
   function createEpisode() {
@@ -186,7 +191,10 @@ export function App() {
     };
     setEpisodes((current) => [newEpisode, ...current]);
     setSelectedId(newEpisode.id);
-    setTimeline([{ label: "Episode created", actor: "Dan Owner", time: "Just now", tone: "neutral" }]);
+    setTimelines((current) => ({
+      ...current,
+      [newEpisode.id]: [{ label: "Episode created", actor: "Dan Owner", time: "Just now", tone: "neutral" }],
+    }));
   }
 
   return (
@@ -291,7 +299,7 @@ export function App() {
 
         <section className="review-section"><h3>Artifacts</h3>
           <Artifact label="Outline" name="outline_v1.0.md" complete />
-          <Artifact label="Script" name={selectedEpisode.artifact} complete />
+          <Artifact label="Script" name={selectedEpisode.artifact} complete={selectedEpisode.artifact !== "—"} />
           <Artifact label="Visual brief" name="—" />
           <Artifact label="Rough cut" name="—" />
           <Artifact label="Final cut" name="—" />
@@ -299,7 +307,7 @@ export function App() {
 
         <section className="review-section"><h3>Audit timeline</h3>
           <ol className="timeline">
-            {timeline.map((event, index) => <li key={`${event.label}-${index}`}><i className={`timeline-dot ${event.tone}`} /><div><strong>{event.label}</strong><span>{event.actor}</span></div><time>{event.time}</time></li>)}
+            {(timelines[selectedEpisode.id] ?? []).map((event, index) => <li key={`${event.label}-${index}`}><i className={`timeline-dot ${event.tone}`} /><div><strong>{event.label}</strong><span>{event.actor}</span></div><time>{event.time}</time></li>)}
           </ol>
         </section>
 
