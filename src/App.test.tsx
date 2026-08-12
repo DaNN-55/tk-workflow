@@ -13,11 +13,13 @@ vi.mock("./lib/supabase", () => ({
 }));
 
 describe("approval console", () => {
-  it("shows the Chinese passwordless sign-in entry when no session exists", async () => {
+  it("shows Chinese password and magic-link sign-in choices when no session exists", async () => {
     render(<App />);
 
     expect(await screen.findByRole("heading", { name: "登录控制台" })).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "邮箱" })).toBeTruthy();
+    expect(screen.getByLabelText("密码")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "使用密码登录" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "发送登录链接" })).toBeTruthy();
   });
 
