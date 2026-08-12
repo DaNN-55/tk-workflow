@@ -1,99 +1,33 @@
-import { useMemo, useState } from "react";
-import reviewPreview from "./assets/review-preview.png";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
+import type { Session } from "@supabase/supabase-js";
+import type { Database, Json } from "./lib/database.types";
+import { supabase } from "./lib/supabase";
+import { defaultBlueprintPolicy, parseBlueprintPolicy } from "./platform/blueprintPolicy";
 import type { EpisodeStage } from "./platform/types";
 
-type NavigationItem = "Accounts" | "Episodes" | "Reviews" | "Publish Queue" | "Learning";
+type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
+type Account = Database["public"]["Tables"]["accounts"]["Row"];
+type Blueprint = Database["public"]["Tables"]["account_blueprint_versions"]["Row"];
+type Episode = Database["public"]["Tables"]["episodes"]["Row"];
+type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
+type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
 
-interface ConsoleEpisode {
-  id: string;
-  title: string;
-  account: string;
-  accountCode: string;
-  series: string;
-  stage: EpisodeStage;
-  artifact: string;
-  updated: string;
+interface Workspace {
+  accounts: Account[];
+  blueprints: Blueprint[];
+  episodes: Episode[];
+  artifacts: Artifact[];
+  transitions: Transition[];
 }
 
-interface TimelineEntry {
-  label: string;
-  actor: string;
-  time: string;
-  tone: "review" | "neutral" | "approved";
-}
-
-const initialEpisodes: ConsoleEpisode[] = [
-  {
-    id: "EP-102",
-    title: "第一个信号",
-    account: "道工作室",
-    accountCode: "DS",
-    series: "基础系列",
-    stage: "script_review",
-    artifact: "script_v1.2.md",
-    updated: "今天 10:42",
-  },
-  {
-    id: "EP-101",
-    title: "安静的结构",
-    account: "道工作室",
-    accountCode: "DS",
-    series: "基础系列",
-    stage: "script_approved",
-    artifact: "script_v1.0.md",
-    updated: "昨天 16:18",
-  },
-  {
-    id: "EP-207",
-    title: "噪音下的信号",
-    account: "北向",
-    accountCode: "NB",
-    series: "田野笔记",
-    stage: "production_ready",
-    artifact: "shotlist_v1.1.md",
-    updated: "2026年5月12日",
-  },
-  {
-    id: "EP-206",
-    title: "值得保留的模式",
-    account: "北向",
-    accountCode: "NB",
-    series: "田野笔记",
-    stage: "script_review",
-    artifact: "script_v0.9.md",
-    updated: "2026年5月12日",
-  },
-  {
-    id: "EP-205",
-    title: "注意力系统",
-    account: "北向",
-    accountCode: "NB",
-    series: "田野笔记",
-    stage: "script_draft",
-    artifact: "outline_v1.0.md",
-    updated: "2026年5月11日",
-  },
-  {
-    id: "EP-301",
-    title: "钩子之后的工作",
-    account: "慢信号",
-    accountCode: "SS",
-    series: "工作室实践",
-    stage: "visual_review",
-    artifact: "visuals_v1.0.pdf",
-    updated: "2026年5月10日",
-  },
-  {
-    id: "EP-303",
-    title: "复核一个新命题",
-    account: "慢信号",
-    accountCode: "SS",
-    series: "工作室实践",
-    stage: "brief_draft",
-    artifact: "—",
-    updated: "2026年5月8日",
-  },
+const navigation: Array<{ id: NavigationItem; label: string }> = [
+  { id: "accounts", label: "账号" },
+  { id: "episodes", label: "生产单" },
+  { id: "reviews", label: "审核" },
+  { id: "publish", label: "发布队列" },
+  { id: "learning", label: "复盘" },
 ];
 
 const stageLabels: Record<EpisodeStage, string> = {
@@ -118,93 +52,227 @@ const stageLabels: Record<EpisodeStage, string> = {
   learning_recorded: "已记录复盘",
 };
 
-const navigation: NavigationItem[] = ["Accounts", "Episodes", "Reviews", "Publish Queue", "Learning"];
-const navigationLabels: Record<NavigationItem, string> = {
-  Accounts: "账号",
-  Episodes: "生产单",
-  Reviews: "审核",
-  "Publish Queue": "发布队列",
-  Learning: "复盘",
-};
-
 function stageTone(stage: EpisodeStage): "review" | "approved" | "muted" {
-  if (stage.endsWith("approved") || stage === "qc_passed" || stage === "publish_ready") {
+  if (stage.endsWith("approved") || stage === "qc_passed" || stage === "publish_ready" || stage === "published") {
     return "approved";
   }
-  if (stage.includes("review")) {
-    return "review";
-  }
+  if (stage.includes("review")) return "review";
   return "muted";
 }
 
+function formatDate(source: string) {
+  return new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(source));
+}
+
+function formatPolicy(policy: Json) {
+  return JSON.stringify(policy, null, 2);
+}
+
+function policyPositioning(policy: Json) {
+  if (policy && typeof policy === "object" && !Array.isArray(policy) && "positioning" in policy) {
+    return typeof policy.positioning === "string" && policy.positioning ? policy.positioning : "尚未填写定位";
+  }
+  return "尚未填写定位";
+}
+
+async function loadWorkspace(): Promise<Workspace> {
+  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, transitionsResult] = await Promise.all([
+    supabase.from("accounts").select("*").order("created_at"),
+    supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
+    supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
+    supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
+    supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
+  ]);
+  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, transitionsResult]
+    .map((result) => result.error)
+    .find(Boolean);
+
+  if (error) throw error;
+
+  return {
+    accounts: accountsResult.data ?? [],
+    blueprints: blueprintsResult.data ?? [],
+    episodes: episodesResult.data ?? [],
+    artifacts: artifactsResult.data ?? [],
+    transitions: transitionsResult.data ?? [],
+  };
+}
+
 export function App() {
-  const [activeNavigation, setActiveNavigation] = useState<NavigationItem>("Episodes");
+  const [activeNavigation, setActiveNavigation] = useState<NavigationItem>("episodes");
   const [theme, setTheme] = useState<Theme>("light");
-  const [episodes, setEpisodes] = useState(initialEpisodes);
-  const [selectedId, setSelectedId] = useState("EP-102");
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
+  const [workspace, setWorkspace] = useState<Workspace | null>(null);
+  const [selectedAccountId, setSelectedAccountId] = useState("");
+  const [selectedEpisodeId, setSelectedEpisodeId] = useState("");
   const [accountFilter, setAccountFilter] = useState("全部账号");
-  const [seriesFilter, setSeriesFilter] = useState("全部系列");
-  const [timelines, setTimelines] = useState<Record<string, TimelineEntry[]>>({
-    "EP-102": [
-      { label: "脚本已提交", actor: "内容工作者", time: "今天 10:42", tone: "review" },
-      { label: "大纲已通过", actor: "Dan（所有者）", time: "昨天 15:27", tone: "neutral" },
-      { label: "生产单已创建", actor: "Dan（所有者）", time: "昨天 09:02", tone: "neutral" },
-    ],
-  });
+  const [showAccountForm, setShowAccountForm] = useState(false);
+  const [showEpisodeForm, setShowEpisodeForm] = useState(false);
+  const [message, setMessage] = useState("");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
+  const [pendingAction, setPendingAction] = useState("");
 
-  const selectedEpisode = episodes.find((episode) => episode.id === selectedId) ?? episodes[0];
-  const accounts = useMemo(
-    () => ["全部账号", ...new Set(episodes.map((episode) => episode.account))],
-    [episodes],
-  );
-  const series = useMemo(
-    () => ["全部系列", ...new Set(episodes.map((episode) => episode.series))],
-    [episodes],
-  );
-  const visibleEpisodes = episodes.filter(
-    (episode) =>
-      (accountFilter === "全部账号" || episode.account === accountFilter) &&
-      (seriesFilter === "全部系列" || episode.series === seriesFilter),
-  );
-  const blockedEpisode = episodes.find((episode) => episode.artifact === "—");
-  const canReviewScript = selectedEpisode.stage === "script_review";
+  const refreshWorkspace = useCallback(async () => {
+    setIsLoading(true);
+    setErrorMessage("");
+    try {
+      const nextWorkspace = await loadWorkspace();
+      setWorkspace(nextWorkspace);
+      setSelectedAccountId((current) => current && nextWorkspace.accounts.some((account) => account.id === current) ? current : nextWorkspace.accounts[0]?.id ?? "");
+      setSelectedEpisodeId((current) => current && nextWorkspace.episodes.some((episode) => episode.id === current) ? current : nextWorkspace.episodes[0]?.id ?? "");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法读取控制数据。");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
 
-  function updateSelectedStage(stage: EpisodeStage, label: string, tone: TimelineEntry["tone"]) {
-    setEpisodes((current) =>
-      current.map((episode) =>
-        episode.id === selectedEpisode.id
-          ? { ...episode, stage, updated: "刚刚" }
-          : episode,
-      ),
-    );
-    setTimelines((current) => ({
-      ...current,
-      [selectedEpisode.id]: [
-        { label, actor: "Dan（所有者）", time: "刚刚", tone },
-        ...(current[selectedEpisode.id] ?? []),
-      ],
-    }));
-  }
-
-  function createEpisode() {
-    const nextNumber = String(304 + episodes.length).padStart(3, "0");
-    const newEpisode: ConsoleEpisode = {
-      id: `EP-${nextNumber}`,
-      title: "未命名生产单",
-      account: "道工作室",
-      accountCode: "DS",
-      series: "基础系列",
-      stage: "brief_draft",
-      artifact: "—",
-      updated: "刚刚",
+  useEffect(() => {
+    let isMounted = true;
+    const initialize = async () => {
+      const { data, error } = await supabase.auth.getSession();
+      if (!isMounted) return;
+      if (error) setErrorMessage(error.message);
+      setSession(data.session);
+      if (data.session) await refreshWorkspace();
+      else setIsLoading(false);
     };
-    setEpisodes((current) => [newEpisode, ...current]);
-    setSelectedId(newEpisode.id);
-    setTimelines((current) => ({
-      ...current,
-      [newEpisode.id]: [{ label: "生产单已创建", actor: "Dan（所有者）", time: "刚刚", tone: "neutral" }],
-    }));
+    void initialize();
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      if (nextSession) void refreshWorkspace();
+      else {
+        setWorkspace(null);
+        setIsLoading(false);
+      }
+    });
+    return () => {
+      isMounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, [refreshWorkspace]);
+
+  const accountsById = useMemo(() => new Map(workspace?.accounts.map((account) => [account.id, account])), [workspace]);
+  const blueprintsById = useMemo(() => new Map(workspace?.blueprints.map((blueprint) => [blueprint.id, blueprint])), [workspace]);
+  const selectedAccount = workspace?.accounts.find((account) => account.id === selectedAccountId) ?? null;
+  const selectedEpisode = workspace?.episodes.find((episode) => episode.id === selectedEpisodeId) ?? null;
+  const visibleEpisodes = useMemo(
+    () => (workspace?.episodes ?? []).filter((episode) => accountFilter === "全部账号" || episode.account_id === accountFilter),
+    [accountFilter, workspace],
+  );
+
+  function changeTheme() {
+    setTheme((current) => {
+      return current === "light" ? "dark" : "light";
+    });
   }
+
+  async function bootstrapPlatform(input: { name: string; slug: string; timezone: string; policy: Json }) {
+    setPendingAction("bootstrap");
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("bootstrap_platform", {
+        p_account_name: input.name,
+        p_account_slug: input.slug,
+        p_timezone: input.timezone,
+        p_policy: input.policy,
+      });
+      if (error) throw error;
+      setMessage("首个账号和蓝图 v1 已初始化。");
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "初始化失败。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function createBlueprint(policy: Json) {
+    if (!selectedAccount) return;
+    setPendingAction("blueprint");
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("create_blueprint_version", { p_account_id: selectedAccount.id, p_policy: policy });
+      if (error) throw error;
+      setMessage("已创建未激活的蓝图版本；请检查后再激活。");
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "创建蓝图版本失败。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function createAccount(input: { name: string; slug: string; timezone: string; policy: Json }) {
+    setPendingAction("account");
+    setErrorMessage("");
+    try {
+      const { data, error } = await supabase.rpc("create_account", {
+        p_account_name: input.name,
+        p_account_slug: input.slug,
+        p_timezone: input.timezone,
+        p_policy: input.policy,
+      });
+      if (error) throw error;
+      setShowAccountForm(false);
+      if (data) setSelectedAccountId(data.id);
+      setMessage("新账号和蓝图 v1 已创建；数据将与其他账号隔离。");
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "创建账号失败。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function activateBlueprint(blueprintId: string) {
+    if (!selectedAccount) return;
+    setPendingAction(`activate-${blueprintId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("activate_blueprint_version", {
+        p_account_id: selectedAccount.id,
+        p_blueprint_version_id: blueprintId,
+      });
+      if (error) throw error;
+      setMessage("蓝图已激活；它只影响之后新建的生产单。");
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "激活蓝图失败。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function createEpisode(title: string, accountId: string) {
+    const account = workspace?.accounts.find((candidate) => candidate.id === accountId);
+    if (!account?.current_blueprint_version_id) return;
+    setPendingAction("episode");
+    setErrorMessage("");
+    try {
+      const { data, error } = await supabase.rpc("create_episode", {
+        p_account_id: account.id,
+        p_blueprint_version_id: account.current_blueprint_version_id,
+        p_title: title,
+      });
+      if (error) throw error;
+      setShowEpisodeForm(false);
+      setMessage("生产单已创建，并已生成首个 brief 任务。");
+      if (data) setSelectedEpisodeId(data.id);
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "创建生产单失败。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  if (isLoading && session === undefined) return <LoadingScreen />;
+  if (!session) return <AuthScreen errorMessage={errorMessage} onSignedIn={() => setMessage("登录成功，正在读取控制数据。") } />;
+  if (isLoading && !workspace) return <LoadingScreen />;
+  if (!workspace) return <ErrorScreen errorMessage={errorMessage} onRetry={refreshWorkspace} />;
+  if (workspace.accounts.length === 0) return <BootstrapScreen errorMessage={errorMessage} isPending={pendingAction === "bootstrap"} onSubmit={bootstrapPlatform} />;
 
   return (
     <main className="app-shell" data-theme={theme}>
@@ -212,149 +280,163 @@ export function App() {
         <div className="wordmark">Loop 控制台</div>
         <nav className="navigation">
           {navigation.map((item) => (
-            <button
-              className={`navigation-item ${activeNavigation === item ? "is-active" : ""}`}
-              key={item}
-              onClick={() => setActiveNavigation(item)}
-              type="button"
-            >
-              <Icon name={item} />
-              <span>{navigationLabels[item]}</span>
+            <button className={`navigation-item ${activeNavigation === item.id ? "is-active" : ""}`} key={item.id} onClick={() => setActiveNavigation(item.id)} type="button">
+              <Icon name={item.id} />
+              <span>{item.label}</span>
             </button>
           ))}
         </nav>
         <div className="owner-profile">
-          <div className="owner-avatar">DO</div>
-          <div>
-            <strong>Dan</strong>
-            <span>所有者</span>
-          </div>
-          <Icon name="Chevron" />
+          <div className="owner-avatar">{session.user.email?.slice(0, 2).toUpperCase() ?? "DO"}</div>
+          <div><strong>{session.user.email ?? "已登录"}</strong><span>所有者</span></div>
+          <button aria-label="退出登录" className="icon-button" onClick={() => void supabase.auth.signOut()} type="button"><Icon name="Exit" /></button>
         </div>
       </aside>
 
-      <section className="content-pane" aria-label="生产单工作台">
+      <section className="content-pane" aria-label="平台工作台">
         <header className="page-header">
-          <h1>{navigationLabels[activeNavigation]}</h1>
-          <button
-            aria-label={theme === "light" ? "切换至深色模式" : "切换至浅色模式"}
-            className="theme-toggle"
-            onClick={() => setTheme((current) => current === "light" ? "dark" : "light")}
-            type="button"
-          >
-            <Icon name={theme === "light" ? "Moon" : "Sun"} />
-            <span>{theme === "light" ? "深色" : "浅色"}</span>
+          <h1>{navigation.find((item) => item.id === activeNavigation)?.label}</h1>
+          <button aria-label={theme === "light" ? "切换至深色模式" : "切换至浅色模式"} className="theme-toggle" onClick={changeTheme} type="button">
+            <Icon name={theme === "light" ? "Moon" : "Sun"} /><span>{theme === "light" ? "深色" : "浅色"}</span>
           </button>
-          <button className="button button-primary" onClick={createEpisode} type="button">
-            新建生产单
-          </button>
+          {activeNavigation === "accounts" ? <button className="button button-primary" onClick={() => setShowAccountForm(true)} type="button">新建账号</button> : null}
+          {activeNavigation === "episodes" ? <button className="button button-primary" onClick={() => setShowEpisodeForm(true)} type="button">新建生产单</button> : null}
         </header>
 
-        <div className="filters" aria-label="生产单筛选">
-          <label>
-            <span>账号</span>
-            <select onChange={(event) => setAccountFilter(event.target.value)} value={accountFilter}>
-              {accounts.map((account) => <option key={account}>{account}</option>)}
-            </select>
-          </label>
-          <label>
-            <span>系列</span>
-            <select onChange={(event) => setSeriesFilter(event.target.value)} value={seriesFilter}>
-              {series.map((seriesName) => <option key={seriesName}>{seriesName}</option>)}
-            </select>
-          </label>
-        </div>
+        {message ? <div className="notice-message" role="status">{message}<button aria-label="关闭通知" onClick={() => setMessage("")} type="button">×</button></div> : null}
+        {errorMessage ? <div className="error-message" role="alert">{errorMessage}</div> : null}
 
-        <div className="episode-table" role="table" aria-label="生产单">
-          <div className="table-row table-header" role="row">
-            <span>生产单</span><span>账号</span><span>系列</span><span>当前阶段</span><span>最新产物</span><span>更新时间</span>
-          </div>
-          {visibleEpisodes.map((episode) => (
-            <button
-              className={`table-row episode-row ${selectedEpisode.id === episode.id ? "is-selected" : ""}`}
-              key={episode.id}
-              onClick={() => setSelectedId(episode.id)}
-              role="row"
-              type="button"
-            >
-              <span className="episode-name"><strong>{episode.title}</strong><small>{episode.id}</small></span>
-              <span className="account-name"><i>{episode.accountCode}</i>{episode.account}</span>
-              <span>{episode.series}</span>
-              <span className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</span>
-              <span className="artifact-name">{episode.artifact}</span>
-              <span>{episode.updated}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="status-legend" aria-label="状态图例">
-          <span><i className="legend-approved" />已通过</span>
-          <span><i className="legend-review" />待审核</span>
-          <span><i className="legend-muted" />草稿 / 制作</span>
-        </div>
-
-        {blockedEpisode ? (
-          <div className="blocker-message" role="status">
-            <Icon name="Alert" />
-            <div><strong>有 1 个生产单需要处理</strong><span>{blockedEpisode.title}（{blockedEpisode.id}）尚未添加制作产物。</span></div>
-            <button className="button button-secondary" onClick={() => setSelectedId(blockedEpisode.id)} type="button">查看生产单</button>
-          </div>
-        ) : null}
+        {activeNavigation === "accounts" ? (
+          <AccountWorkspace
+            account={selectedAccount}
+            accounts={workspace.accounts}
+            blueprints={workspace.blueprints.filter((blueprint) => blueprint.account_id === selectedAccount?.id)}
+            isPending={pendingAction}
+            onActivate={activateBlueprint}
+            onCreateBlueprint={createBlueprint}
+            onSelectAccount={setSelectedAccountId}
+          />
+        ) : (
+          <EpisodeWorkspace
+            accounts={workspace.accounts}
+            accountsById={accountsById}
+            artifacts={workspace.artifacts}
+            blueprintsById={blueprintsById}
+            currentNavigation={activeNavigation}
+            episodes={visibleEpisodes}
+            filter={accountFilter}
+            onFilter={setAccountFilter}
+            onSelectEpisode={setSelectedEpisodeId}
+            selectedEpisode={selectedEpisode}
+          />
+        )}
       </section>
 
-      <aside className="review-pane" aria-label="当前生产单审核">
-        <header className="review-heading">
-          <div><h2>{selectedEpisode.title}</h2><span>{selectedEpisode.id}</span></div>
-          <button className="icon-button" aria-label="关闭审核面板" type="button"><Icon name="Close" /></button>
-        </header>
-        <p className="review-meta">{selectedEpisode.account} <b>·</b> {selectedEpisode.series}</p>
-        <div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(selectedEpisode.stage)}`}>{stageLabels[selectedEpisode.stage]}</strong></div>
-
-        <div className="media-preview">
-          <img alt="录制工作室中的讲述者审核预览" src={reviewPreview} />
-          <div className="media-overlay"><span>脚本审核</span><strong>{selectedEpisode.title}</strong><button aria-label="播放预览" type="button"><Icon name="Play" /></button></div>
-        </div>
-
-        <section className="review-section"><h3>产物</h3>
-          <Artifact label="大纲" name="outline_v1.0.md" complete />
-          <Artifact label="脚本" name={selectedEpisode.artifact} complete={selectedEpisode.artifact !== "—"} />
-          <Artifact label="视觉简报" name="—" />
-          <Artifact label="粗剪" name="—" />
-          <Artifact label="最终成片" name="—" />
-        </section>
-
-        <section className="review-section"><h3>审计时间线</h3>
-          <ol className="timeline">
-            {(timelines[selectedEpisode.id] ?? []).map((event, index) => <li key={`${event.label}-${index}`}><i className={`timeline-dot ${event.tone}`} /><div><strong>{event.label}</strong><span>{event.actor}</span></div><time>{event.time}</time></li>)}
-          </ol>
-        </section>
-
-        <div className="review-actions">
-          <button className="button button-primary" disabled={!canReviewScript} onClick={() => updateSelectedStage("script_approved", "脚本已通过", "approved")} type="button">{canReviewScript ? "通过脚本" : "脚本已通过"}</button>
-          <button className="button button-secondary" disabled={!canReviewScript} onClick={() => updateSelectedStage("script_draft", "已请求修改", "review")} type="button">请求修改</button>
-        </div>
+      <aside className="review-pane" aria-label="当前生产单详情">
+        {selectedEpisode ? (
+          <EpisodeDetail artifacts={workspace.artifacts} blueprint={blueprintsById.get(selectedEpisode.blueprint_version_id) ?? null} episode={selectedEpisode} transitions={workspace.transitions} />
+        ) : <EmptyDetail />}
       </aside>
+
+      {showEpisodeForm ? <EpisodeForm accounts={workspace.accounts} isPending={pendingAction === "episode"} onClose={() => setShowEpisodeForm(false)} onSubmit={createEpisode} /> : null}
+      {showAccountForm ? <AccountForm isPending={pendingAction === "account"} onClose={() => setShowAccountForm(false)} onSubmit={createAccount} /> : null}
     </main>
   );
 }
 
-function Artifact({ complete = false, label, name }: { complete?: boolean; label: string; name: string }) {
-  return <div className="artifact-row"><i className={complete ? "artifact-complete" : "artifact-pending"}>{complete ? "✓" : ""}</i><span>{label}</span><small>{name}</small></div>;
+function AuthScreen({ errorMessage, onSignedIn }: { errorMessage: string; onSignedIn: () => void }) {
+  const [email, setEmail] = useState("");
+  const [notice, setNotice] = useState("");
+  const [pending, setPending] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setPending(true);
+    setNotice("");
+    const { error } = await supabase.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+    setPending(false);
+    if (error) setNotice(error.message);
+    else {
+      setNotice("登录链接已发送，请在本机浏览器中打开邮件并回到此页面。");
+      onSignedIn();
+    }
+  }
+
+  return <main className="access-shell"><section className="access-card"><div className="wordmark">Loop 控制台</div><h1>登录控制台</h1><p>使用你的所有者邮箱登录。平台数据、审批和蓝图均受账号权限控制。</p><form onSubmit={submit}><label>邮箱<input aria-label="邮箱" autoComplete="email" onChange={(event) => setEmail(event.target.value)} placeholder="you@example.com" required type="email" value={email} /></label><button className="button button-primary" disabled={pending} type="submit">{pending ? "发送中…" : "发送登录链接"}</button></form>{notice ? <p className="form-notice">{notice}</p> : null}{errorMessage ? <p className="form-error">{errorMessage}</p> : null}</section></main>;
 }
 
-function Icon({ name }: { name: NavigationItem | "Chevron" | "Alert" | "Close" | "Play" | "Moon" | "Sun" }) {
-  const paths: Record<string, string> = {
-    Accounts: "M4 20v-1a4 4 0 0 1 4-4h5a4 4 0 0 1 4 4v1M10.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 9v6M22 12h-6",
-    Episodes: "M4 4h16v16H4zM9 4v16M4 9h16M13 12h4M13 16h4",
-    Reviews: "M4 5h16v11H8l-4 4z",
-    "Publish Queue": "M12 3v12M7 8l5-5 5 5M5 21h14",
-    Learning: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 5.5v16M8 7h8",
-    Chevron: "m8 10 4 4 4-4",
-    Alert: "M12 4 3 20h18L12 4ZM12 9v5M12 17h.01",
-    Close: "m6 6 12 12M18 6 6 18",
-    Play: "m9 6 9 6-9 6z",
-    Moon: "M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z",
-    Sun: "M12 3v2M12 19v2M3 12h2M19 12h2m-2.64-6.64-1.41 1.41M7.05 16.95l-1.41 1.41m0-12.72 1.41 1.41m9.9 9.9 1.41 1.41M15.5 12a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z",
-  };
+function BootstrapScreen({ errorMessage, isPending, onSubmit }: { errorMessage: string; isPending: boolean; onSubmit: (input: { name: string; slug: string; timezone: string; policy: Json }) => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [timezone, setTimezone] = useState("Asia/Shanghai");
+  const [policy, setPolicy] = useState(formatPolicy(defaultBlueprintPolicy));
+  const [formError, setFormError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setFormError("");
+      await onSubmit({ name, slug, timezone, policy: parseBlueprintPolicy(policy) });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "蓝图规则无法解析。");
+    }
+  }
+
+  return <main className="access-shell"><section className="access-card bootstrap-card"><div className="wordmark">Loop 控制台</div><h1>初始化首个账号</h1><p>这会创建你的所有者成员资格与蓝图 v1。后续账号、蓝图和生产单都会通过受控接口创建。</p><form onSubmit={submit}><label>账号名称<input onChange={(event) => setName(event.target.value)} placeholder="例如：道工作室" required value={name} /></label><label>账号标识<input onChange={(event) => setSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="dao-studio" required value={slug} /></label><label>时区<input onChange={(event) => setTimezone(event.target.value)} required value={timezone} /></label><label>蓝图规则（JSON）<textarea onChange={(event) => setPolicy(event.target.value)} rows={10} value={policy} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "初始化中…" : "创建首个账号"}</button></form>{formError || errorMessage ? <p className="form-error">{formError || errorMessage}</p> : null}</section></main>;
+}
+
+function LoadingScreen() { return <main className="access-shell"><div className="loading-mark">正在连接受控平台…</div></main>; }
+function ErrorScreen({ errorMessage, onRetry }: { errorMessage: string; onRetry: () => Promise<void> }) { return <main className="access-shell"><section className="access-card"><h1>无法读取控制数据</h1><p className="form-error">{errorMessage}</p><button className="button button-primary" onClick={() => void onRetry()} type="button">重试</button></section></main>; }
+
+function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate, onCreateBlueprint, onSelectAccount }: { account: Account | null; accounts: Account[]; blueprints: Blueprint[]; isPending: string; onActivate: (id: string) => Promise<void>; onCreateBlueprint: (policy: Json) => Promise<void>; onSelectAccount: (id: string) => void }) {
+  const [policy, setPolicy] = useState("");
+  const [formError, setFormError] = useState("");
+  useEffect(() => { setPolicy(account ? formatPolicy(blueprints.find((blueprint) => blueprint.id === account.current_blueprint_version_id)?.policy ?? defaultBlueprintPolicy) : ""); }, [account, blueprints]);
+  if (!account) return <div className="empty-state">没有可读取的账号。</div>;
+  return <><div className="account-selector"><label>当前账号<select onChange={(event) => onSelectAccount(event.target.value)} value={account.id}>{accounts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><p>{policyPositioning(blueprints.find((blueprint) => blueprint.id === account.current_blueprint_version_id)?.policy ?? defaultBlueprintPolicy)}</p></div><div className="account-layout"><section className="blueprint-list"><h2>蓝图版本</h2>{blueprints.map((blueprint) => <article className={`blueprint-card ${blueprint.is_active ? "is-active" : ""}`} key={blueprint.id}><div><strong>v{blueprint.version}</strong><span>{blueprint.is_active ? "当前生效" : "待激活"}</span></div><p>{policyPositioning(blueprint.policy)}</p>{blueprint.is_active ? null : <button className="button button-secondary" disabled={isPending === `activate-${blueprint.id}`} onClick={() => void onActivate(blueprint.id)} type="button">激活此版本</button>}</article>)}</section><section className="blueprint-editor"><h2>新建蓝图版本</h2><p>新版本不会影响已创建的生产单；激活后只用于新生产单。</p><textarea aria-label="新蓝图规则" onChange={(event) => setPolicy(event.target.value)} rows={14} value={policy} /><button className="button button-primary" disabled={isPending === "blueprint"} onClick={() => { try { setFormError(""); void onCreateBlueprint(parseBlueprintPolicy(policy)); } catch (error) { setFormError(error instanceof Error ? error.message : "规则无法解析。") } }} type="button">{isPending === "blueprint" ? "创建中…" : "创建版本"}</button>{formError ? <p className="form-error">{formError}</p> : null}</section></div></>;
+}
+
+function EpisodeWorkspace({ accounts, accountsById, artifacts, blueprintsById, currentNavigation, episodes, filter, onFilter, onSelectEpisode, selectedEpisode }: { accounts: Account[]; accountsById: Map<string, Account>; artifacts: Artifact[]; blueprintsById: Map<string, Blueprint>; currentNavigation: NavigationItem; episodes: Episode[]; filter: string; onFilter: (value: string) => void; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
+  if (currentNavigation !== "episodes") return <div className="empty-state"><h2>{currentNavigation === "reviews" ? "审核队列" : currentNavigation === "publish" ? "发布队列" : "复盘记录"}</h2><p>该模块将在后续 Worker 与发布包任务中接入。当前所有状态与审计均来自真实数据库。</p></div>;
+  return <><div className="filters"><label><span>账号</span><select onChange={(event) => onFilter(event.target.value)} value={filter}><option value="全部账号">全部账号</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><span className="summary-count">{episodes.length} 个生产单</span></div><div className="episode-table" role="table" aria-label="生产单"><div className="table-row table-header" role="row"><span>生产单</span><span>账号</span><span>蓝图</span><span>当前阶段</span><span>产物数</span><span>更新时间</span></div>{episodes.map((episode) => <button className={`table-row episode-row ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id} onClick={() => onSelectEpisode(episode.id)} role="row" type="button"><span className="episode-name"><strong>{episode.title}</strong><small>{episode.id.slice(0, 8)}</small></span><span className="account-name"><i>{accountsById.get(episode.account_id)?.slug.slice(0, 2).toUpperCase()}</i>{accountsById.get(episode.account_id)?.name}</span><span>v{blueprintsById.get(episode.blueprint_version_id)?.version ?? "—"}</span><span className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</span><span>{artifacts.filter((artifact) => artifact.episode_id === episode.id).length}</span><span>{formatDate(episode.updated_at)}</span></button>)}</div>{episodes.length === 0 ? <div className="empty-state compact"><h2>还没有生产单</h2><p>请点击右上角“新建生产单”。每个生产单都会固定使用当前激活蓝图。</p></div> : null}<div className="status-legend"><span><i className="legend-approved" />已通过</span><span><i className="legend-review" />待审核</span><span><i className="legend-muted" />草稿 / 制作</span></div></>;
+}
+
+function EpisodeDetail({ artifacts, blueprint, episode, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; transitions: Transition[] }) {
+  const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
+  const history = transitions.filter((transition) => transition.episode_id === episode.id);
+  return <><header className="review-heading"><div><h2>{episode.title}</h2><span>{episode.id.slice(0, 8)}</span></div></header><p className="review-meta">蓝图 v{blueprint?.version ?? "—"} · 创建于 {formatDate(episode.created_at)}</p><div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div><div className="no-media-preview"><Icon name="Play" /><strong>暂无媒体预览</strong><span>媒体文件仍保留在外置硬盘，平台仅保存索引与哈希。</span></div><section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无产物。首个 brief 任务已创建，等待 Worker 接入。</p>}</section><section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section></>;
+}
+
+function EmptyDetail() { return <div className="empty-detail"><h2>选择一个生产单</h2><p>右侧会显示真实产物索引、固定蓝图版本与审计记录。</p></div>; }
+function Artifact({ complete = false, label, name }: { complete?: boolean; label: string; name: string }) { return <div className="artifact-row"><i className={complete ? "artifact-complete" : "artifact-pending"}>{complete ? "✓" : ""}</i><span>{label}</span><small>{name}</small></div>; }
+
+function EpisodeForm({ accounts, isPending, onClose, onSubmit }: { accounts: Account[]; isPending: boolean; onClose: () => void; onSubmit: (title: string, accountId: string) => Promise<void> }) {
+  const [title, setTitle] = useState("");
+  const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
+  return <div className="modal-backdrop" role="presentation"><form aria-label="新建生产单" className="modal-card" onSubmit={(event) => { event.preventDefault(); void onSubmit(title, accountId); }}><header><div><h2>新建生产单</h2><p>会固定采用所选账号当前激活的蓝图。</p></div><button aria-label="关闭新建生产单" className="icon-button" onClick={onClose} type="button"><Icon name="Close" /></button></header><label>账号<select onChange={(event) => setAccountId(event.target.value)} value={accountId}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label>生产单标题<input autoFocus onChange={(event) => setTitle(event.target.value)} placeholder="例如：越南民间信仰中的符号" required value={title} /></label><div className="modal-actions"><button className="button button-secondary" onClick={onClose} type="button">取消</button><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "创建中…" : "创建生产单"}</button></div></form></div>;
+}
+
+function AccountForm({ isPending, onClose, onSubmit }: { isPending: boolean; onClose: () => void; onSubmit: (input: { name: string; slug: string; timezone: string; policy: Json }) => Promise<void> }) {
+  const [name, setName] = useState("");
+  const [slug, setSlug] = useState("");
+  const [timezone, setTimezone] = useState("Asia/Shanghai");
+  const [policy, setPolicy] = useState(formatPolicy(defaultBlueprintPolicy));
+  const [formError, setFormError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setFormError("");
+      await onSubmit({ name, slug, timezone, policy: parseBlueprintPolicy(policy) });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "蓝图规则无法解析。");
+    }
+  }
+
+  return <div className="modal-backdrop" role="presentation"><form aria-label="新建账号" className="modal-card" onSubmit={submit}><header><div><h2>新建账号</h2><p>将创建独立的蓝图 v1；生产单、审批和审计记录互相隔离。</p></div><button aria-label="关闭新建账号" className="icon-button" onClick={onClose} type="button"><Icon name="Close" /></button></header><label>账号名称<input autoFocus onChange={(event) => setName(event.target.value)} placeholder="例如：道工作室 2" required value={name} /></label><label>账号标识<input onChange={(event) => setSlug(event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} pattern="[a-z0-9]+(?:-[a-z0-9]+)*" placeholder="dao-studio-2" required value={slug} /></label><label>时区<input onChange={(event) => setTimezone(event.target.value)} required value={timezone} /></label><label>蓝图规则（JSON）<textarea onChange={(event) => setPolicy(event.target.value)} rows={8} value={policy} /></label><div className="modal-actions"><button className="button button-secondary" onClick={onClose} type="button">取消</button><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "创建中…" : "创建账号"}</button></div>{formError ? <p className="form-error">{formError}</p> : null}</form></div>;
+}
+
+function Icon({ name }: { name: NavigationItem | "Moon" | "Sun" | "Exit" | "Close" | "Play" }) {
+  const paths: Record<string, string> = { accounts: "M4 20v-1a4 4 0 0 1 4-4h5a4 4 0 0 1 4 4v1M10.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 9v6M22 12h-6", episodes: "M4 4h16v16H4zM9 4v16M4 9h16M13 12h4M13 16h4", reviews: "M4 5h16v11H8l-4 4z", publish: "M12 3v12M7 8l5-5 5 5M5 21h14", learning: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 5.5v16M8 7h8", Moon: "M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z", Sun: "M12 3v2M12 19v2M3 12h2M19 12h2m-2.64-6.64-1.41 1.41M7.05 16.95l-1.41 1.41m0-12.72 1.41 1.41m9.9 9.9 1.41 1.41M15.5 12a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z", Exit: "M10 17l5-5-5-5M15 12H3m9-8h6a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-6", Close: "m6 6 12 12M18 6 6 18", Play: "m9 6 9 6-9 6z" };
   return <svg aria-hidden="true" className="icon" fill="none" viewBox="0 0 24 24"><path d={paths[name]} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" /></svg>;
 }
