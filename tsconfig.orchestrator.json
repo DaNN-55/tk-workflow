@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": false,
+    "outDir": "./dist/orchestration",
+    "rootDir": "./src",
+    "types": ["node"]
+  },
+  "include": [
+    "src/orchestration/notificationPolicy.ts",
+    "src/orchestration/loopOrchestratorCli.ts"
+  ]
+}

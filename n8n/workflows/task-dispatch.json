@@ -1,0 +1,60 @@
+{
+  "name": "Loop — 任务派发",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "3e07fc52-a02c-45d0-b5c0-b6e4bf32e893",
+      "name": "每 5 分钟检查任务",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "\"$LOOP_PROJECT_ROOT/n8n/run-orchestrator.sh\" dispatch"
+      },
+      "id": "17e7a505-d68e-41e5-b2ce-8453c781856d",
+      "name": "派发一个可执行任务",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "每 5 分钟检查任务": {
+      "main": [
+        [
+          {
+            "node": "派发一个可执行任务",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "23b8b19e-966f-4a16-86d6-9200c0599b14",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {}
+}

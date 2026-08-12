@@ -1,0 +1,60 @@
+{
+  "name": "Loop — 状态变更提醒",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "85014878-8cf6-4b73-9c42-a1c06de10d5e",
+      "name": "每 5 分钟检查状态",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "\"$LOOP_PROJECT_ROOT/n8n/run-orchestrator.sh\" notify-state-changes"
+      },
+      "id": "a3a10df4-1572-4b8f-91ce-7dc307154b6c",
+      "name": "发送状态变更提醒",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "每 5 分钟检查状态": {
+      "main": [
+        [
+          {
+            "node": "发送状态变更提醒",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "458c7b33-3a03-42aa-aeb4-8d09bb519659",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {}
+}

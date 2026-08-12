@@ -10,7 +10,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "worker:build": "tsc -p tsconfig.worker.json",
-    "worker:run": "npm run worker:build && node dist/worker/worker/codexWorkerCli.js"
+    "worker:run": "npm run worker:build && node dist/worker/worker/codexWorkerCli.js",
+    "orchestrator:build": "tsc -p tsconfig.orchestrator.json",
+    "orchestrator:run": "npm run orchestrator:build && node dist/orchestration/orchestration/loopOrchestratorCli.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",

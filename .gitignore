@@ -2,4 +2,6 @@ node_modules/
 dist/
 .env
 .env.local
+n8n/runtime/
+n8n/worker.env.local
 *.tsbuildinfo

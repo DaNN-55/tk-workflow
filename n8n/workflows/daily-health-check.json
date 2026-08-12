@@ -1,0 +1,61 @@
+{
+  "name": "Loop — 每日健康检查",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "triggerAtHour": 9,
+              "triggerAtMinute": 0
+            }
+          ]
+        }
+      },
+      "id": "fb24dff6-b7f9-4fd9-bb84-96ccf03a4772",
+      "name": "每天 09:00 健康检查",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "\"$LOOP_PROJECT_ROOT/n8n/run-orchestrator.sh\" health"
+      },
+      "id": "e6dd656e-10f6-4ed7-9b21-a9c3623b17da",
+      "name": "运行健康检查",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "每天 09:00 健康检查": {
+      "main": [
+        [
+          {
+            "node": "运行健康检查",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "de63c5ad-5953-4f2e-b649-d71eaf037732",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {}
+}

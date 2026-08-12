@@ -1,0 +1,60 @@
+{
+  "name": "Loop — 审核提醒",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 5
+            }
+          ]
+        }
+      },
+      "id": "29d9f563-ef47-4f81-acd1-139dc1ea1a5c",
+      "name": "每 5 分钟检查审核",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "command": "\"$LOOP_PROJECT_ROOT/n8n/run-orchestrator.sh\" notify-approvals"
+      },
+      "id": "d4e582b1-536b-4813-8db0-6b57947cccb0",
+      "name": "发送审核提醒",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [
+        260,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "每 5 分钟检查审核": {
+      "main": [
+        [
+          {
+            "node": "发送审核提醒",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "versionId": "21a4d632-a2c2-42ce-af7d-3ee91b48d758",
+  "meta": {
+    "templateCredsSetupCompleted": true
+  },
+  "pinData": {}
+}
