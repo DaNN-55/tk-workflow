@@ -1,13 +1,29 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { backupFilesToRemove, formatBackupFilename } from "./backupPolicy.js";
 import { collectNotifications, type AuditEvent, type NotificationCursor } from "./notificationPolicy.js";
 
 const execFileAsync = promisify(execFile);
 const projectRoot = requiredEnvironment("LOOP_PROJECT_ROOT");
 const stateDirectory = process.env.LOOP_N8N_STATE_DIR ?? join(projectRoot, "n8n", "runtime", "orchestration");
+const backupDirectory = join(projectRoot, "n8n", "runtime", "backups");
 const mode = process.argv[2];
+const backupTables = [
+  "accounts",
+  "account_blueprint_versions",
+  "account_memberships",
+  "episodes",
+  "tasks",
+  "artifacts",
+  "approvals",
+  "state_transitions",
+  "audit_events",
+  "experiments",
+  "metric_snapshots",
+  "asset_locks",
+] as const;
 
 try {
   switch (mode) {
@@ -60,6 +76,7 @@ async function runHealthCheck(): Promise<void> {
     check("项目目录", async () => { await stat(projectRoot); }),
     check("Codex CLI", async () => { await execFileAsync("codex", ["--version"]); }),
     check("Supabase 服务", checkSupabase),
+    check("Supabase 逻辑备份", exportLogicalDatabase),
   ]);
   const passed = checks.every((checkResult) => checkResult.passed);
   if (!passed) {
@@ -70,8 +87,7 @@ async function runHealthCheck(): Promise<void> {
 }
 
 async function checkSupabase(): Promise<void> {
-  const url = requiredEnvironment("SUPABASE_URL");
-  const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
+  const { url, serviceRoleKey } = supabaseCredentials();
   const endpoint = new URL("/rest/v1/accounts?select=id&limit=1", url);
   const response = await fetch(endpoint, {
     headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
@@ -80,8 +96,7 @@ async function checkSupabase(): Promise<void> {
 }
 
 async function fetchAuditEvents(cursor: NotificationCursor | null): Promise<AuditEvent[]> {
-  const url = requiredEnvironment("SUPABASE_URL");
-  const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
+  const { url, serviceRoleKey } = supabaseCredentials();
   const endpoint = new URL("/rest/v1/audit_events", url);
   endpoint.searchParams.set("select", "id,created_at,event_type,payload");
   endpoint.searchParams.set("event_type", "eq.stage_transition");
@@ -96,6 +111,41 @@ async function fetchAuditEvents(cursor: NotificationCursor | null): Promise<Audi
   const payload: unknown = await response.json();
   if (!Array.isArray(payload)) throw new Error("读取审计事件失败：Supabase 返回格式无效。");
   return payload.flatMap(toAuditEvent);
+}
+
+async function exportLogicalDatabase(): Promise<void> {
+  const { url, serviceRoleKey } = supabaseCredentials();
+  const tables: Record<string, unknown[]> = {};
+  for (const table of backupTables) tables[table] = await fetchTableRows(url, serviceRoleKey, table);
+
+  const createdAt = new Date();
+  await mkdir(backupDirectory, { recursive: true });
+  const backupPath = join(backupDirectory, formatBackupFilename(createdAt));
+  const temporaryPath = `${backupPath}.next`;
+  await writeFile(temporaryPath, `${JSON.stringify({ version: "supabase-logical-backup/v1", createdAt: createdAt.toISOString(), tables })}\n`, { encoding: "utf8", mode: 0o600 });
+  await chmod(temporaryPath, 0o600);
+  await rename(temporaryPath, backupPath);
+
+  const oldFiles = backupFilesToRemove(await readdir(backupDirectory), 14);
+  await Promise.all(oldFiles.map((fileName) => rm(join(backupDirectory, fileName))));
+}
+
+async function fetchTableRows(url: string, serviceRoleKey: string, table: string): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  for (let offset = 0; ; offset += 1000) {
+    const endpoint = new URL(`/rest/v1/${table}`, url);
+    endpoint.searchParams.set("select", "*");
+    endpoint.searchParams.set("limit", "1000");
+    endpoint.searchParams.set("offset", String(offset));
+    const response = await fetch(endpoint, {
+      headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
+    });
+    if (!response.ok) throw new Error(`导出 ${table} 失败：Supabase 返回 HTTP ${response.status}`);
+    const page: unknown = await response.json();
+    if (!Array.isArray(page)) throw new Error(`导出 ${table} 失败：Supabase 返回格式无效。`);
+    rows.push(...page);
+    if (page.length < 1000) return rows;
+  }
 }
 
 function toAuditEvent(value: unknown): AuditEvent[] {
@@ -170,6 +220,10 @@ function requiredEnvironment(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} 未配置。`);
   return value;
+}
+
+function supabaseCredentials(): { url: string; serviceRoleKey: string } {
+  return { url: requiredEnvironment("SUPABASE_URL"), serviceRoleKey: requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY") };
 }
 
 function errorMessage(error: unknown): string {

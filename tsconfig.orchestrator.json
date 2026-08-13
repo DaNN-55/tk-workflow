@@ -12,6 +12,7 @@
     "types": ["node"]
   },
   "include": [
+    "src/orchestration/backupPolicy.ts",
     "src/orchestration/notificationPolicy.ts",
     "src/orchestration/loopOrchestratorCli.ts"
   ]
