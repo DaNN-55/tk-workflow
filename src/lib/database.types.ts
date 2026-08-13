@@ -584,6 +584,44 @@ export type Database = {
         }
         Returns: boolean
       }
+      record_publish_package: {
+        Args: {
+          p_episode_id: string
+          p_file_size: number
+          p_relative_path: string
+          p_sha256: string
+        }
+        Returns: {
+          artifact_type: string
+          created_at: string
+          episode_id: string
+          file_size: number
+          id: string
+          producer_task_id: string | null
+          relative_path: string
+          sha256: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "artifacts"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      record_publish_package_verification: {
+        Args: { p_episode_id: string; p_file_size: number; p_sha256: string }
+        Returns: {
+          budget_limit_cents: number | null
+          created_at: string
+          episode_id: string
+          id: string
+          input_snapshot: Json
+          max_attempts: number
+          status: Database["public"]["Enums"]["task_status"]
+          task_type: string
+        }
+        SetofOptions: { from: "*"; to: "tasks"; isOneToOne: true; isSetofReturn: false }
+      }
       transition_episode: {
         Args: {
           p_episode_id: string

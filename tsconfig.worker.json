@@ -13,8 +13,14 @@
   },
   "include": [
     "src/worker/contracts.ts",
+    "src/worker/assetRoot.ts",
+    "src/worker/runtimeEnvironment.ts",
     "src/worker/codexRunner.ts",
     "src/worker/mediaLibrary.ts",
-    "src/worker/codexWorkerCli.ts"
+    "src/worker/codexWorkerCli.ts",
+    "src/publishing/publishPackage.ts",
+    "src/publishing/publishContext.ts",
+    "src/publishing/publishPackageCli.ts",
+    "src/publishing/publishPackageVerifyCli.ts"
   ]
 }

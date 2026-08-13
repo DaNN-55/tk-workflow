@@ -10,6 +10,7 @@ import {
 import type { WorkerTaskPackage } from "./contracts.js";
 import type { ArtifactManifest } from "./contracts.js";
 import { verifyArtifactIndex, verifyMediaLibrary } from "./mediaLibrary.js";
+import { nonNegativeIntegerEnvironment, requiredEnvironment } from "./runtimeEnvironment.js";
 
 const supabaseUrl = requiredEnvironment("SUPABASE_URL");
 const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
@@ -122,18 +123,6 @@ function runCommand(command: string, argumentsList: string[]): Promise<void> {
       else reject(new Error(stderr.trim() || `Codex exited with status ${code ?? "unknown"}.`));
     });
   });
-}
-
-function requiredEnvironment(name: string): string {
-  const value = process.env[name]?.trim();
-  if (!value) throw new Error(`${name} is required.`);
-  return value;
-}
-
-function nonNegativeIntegerEnvironment(name: string): number {
-  const value = requiredEnvironment(name);
-  if (!/^\d+$/.test(value)) throw new Error(`${name} must be a non-negative integer.`);
-  return Number(value);
 }
 
 const workerResultJsonSchema = {

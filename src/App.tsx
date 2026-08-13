@@ -5,6 +5,7 @@ import type { Database, Json } from "./lib/database.types";
 import { supabase } from "./lib/supabase";
 import { blueprintAssetRoot, defaultBlueprintPolicy, parseBlueprintPolicy, withBlueprintAssetRoot } from "./platform/blueprintPolicy";
 import type { EpisodeStage } from "./platform/types";
+import { createPublicationConfirmation } from "./publishing/publicationConfirmation";
 
 type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
@@ -12,6 +13,7 @@ type Account = Database["public"]["Tables"]["accounts"]["Row"];
 type Blueprint = Database["public"]["Tables"]["account_blueprint_versions"]["Row"];
 type Episode = Database["public"]["Tables"]["episodes"]["Row"];
 type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
+type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
 
 interface Workspace {
@@ -19,6 +21,7 @@ interface Workspace {
   blueprints: Blueprint[];
   episodes: Episode[];
   artifacts: Artifact[];
+  tasks: Task[];
   transitions: Transition[];
 }
 
@@ -80,14 +83,15 @@ function policyAssetRoot(policy: Json) {
 }
 
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, transitionsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
     supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
+    supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, transitionsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -98,6 +102,7 @@ async function loadWorkspace(): Promise<Workspace> {
     blueprints: blueprintsResult.data ?? [],
     episodes: episodesResult.data ?? [],
     artifacts: artifactsResult.data ?? [],
+    tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
   };
 }
@@ -273,6 +278,25 @@ export function App() {
     }
   }
 
+  async function transitionEpisode(episodeId: string, toStage: EpisodeStage, reason: string) {
+    setPendingAction(`transition-${episodeId}-${toStage}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("transition_episode", {
+        p_episode_id: episodeId,
+        p_to_stage: toStage,
+        p_reason: reason,
+      });
+      if (error) throw error;
+      setMessage(toStage === "published" ? "已记录 Owner 的人工发布确认。" : "发布包已进入人工发布确认。" );
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法写入发布状态。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   if (isLoading && session === undefined) return <LoadingScreen />;
   if (!session) return <AuthScreen errorMessage={errorMessage} onSignedIn={() => setMessage("登录成功，正在读取控制数据。") } />;
   if (isLoading && !workspace) return <LoadingScreen />;
@@ -321,6 +345,17 @@ export function App() {
             onActivate={activateBlueprint}
             onCreateBlueprint={createBlueprint}
             onSelectAccount={setSelectedAccountId}
+          />
+        ) : activeNavigation === "publish" ? (
+          <PublishWorkspace
+            accountsById={accountsById}
+            artifacts={workspace.artifacts}
+            tasks={workspace.tasks}
+            episodes={visibleEpisodes}
+            isPending={pendingAction}
+            onSelectEpisode={setSelectedEpisodeId}
+            onTransition={transitionEpisode}
+            selectedEpisode={selectedEpisode}
           />
         ) : (
           <EpisodeWorkspace
@@ -463,6 +498,30 @@ function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate
 function EpisodeWorkspace({ accounts, accountsById, artifacts, blueprintsById, currentNavigation, episodes, filter, onFilter, onSelectEpisode, selectedEpisode }: { accounts: Account[]; accountsById: Map<string, Account>; artifacts: Artifact[]; blueprintsById: Map<string, Blueprint>; currentNavigation: NavigationItem; episodes: Episode[]; filter: string; onFilter: (value: string) => void; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
   if (currentNavigation !== "episodes") return <div className="empty-state"><h2>{currentNavigation === "reviews" ? "审核队列" : currentNavigation === "publish" ? "发布队列" : "复盘记录"}</h2><p>该模块将在后续 Worker 与发布包任务中接入。当前所有状态与审计均来自真实数据库。</p></div>;
   return <><div className="filters"><label><span>账号</span><select onChange={(event) => onFilter(event.target.value)} value={filter}><option value="全部账号">全部账号</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><span className="summary-count">{episodes.length} 个生产单</span></div><div className="episode-table" role="table" aria-label="生产单"><div className="table-row table-header" role="row"><span>生产单</span><span>账号</span><span>蓝图</span><span>当前阶段</span><span>产物数</span><span>更新时间</span></div>{episodes.map((episode) => <button className={`table-row episode-row ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id} onClick={() => onSelectEpisode(episode.id)} role="row" type="button"><span className="episode-name"><strong>{episode.title}</strong><small>{episode.id.slice(0, 8)}</small></span><span className="account-name"><i>{accountsById.get(episode.account_id)?.slug.slice(0, 2).toUpperCase()}</i>{accountsById.get(episode.account_id)?.name}</span><span>v{blueprintsById.get(episode.blueprint_version_id)?.version ?? "—"}</span><span className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</span><span>{artifacts.filter((artifact) => artifact.episode_id === episode.id).length}</span><span>{formatDate(episode.updated_at)}</span></button>)}</div>{episodes.length === 0 ? <div className="empty-state compact"><h2>还没有生产单</h2><p>请点击右上角“新建生产单”。每个生产单都会固定使用当前激活蓝图。</p></div> : null}<div className="status-legend"><span><i className="legend-approved" />已通过</span><span><i className="legend-review" />待审核</span><span><i className="legend-muted" />草稿 / 制作</span></div></>;
+}
+
+export function PublishWorkspace({ accountsById, artifacts, episodes, isPending, onSelectEpisode, onTransition, selectedEpisode, tasks }: { accountsById: Map<string, Account>; artifacts: Artifact[]; episodes: Episode[]; isPending: string; onSelectEpisode: (id: string) => void; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; selectedEpisode: Episode | null; tasks: Task[] }) {
+  const queue = episodes.filter((episode) => episode.stage === "qc_passed" || episode.stage === "publish_ready" || episode.stage === "publishing_review");
+  return <><p className="muted-copy">发布包由本机 `publish:prepare` 生成并固定索引；人工发布前请运行 `publish:verify` 复核文件。控制台不会连接或点击任何发布平台。</p><div className="publish-queue">{queue.map((episode) => <article className={`publish-card ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id}><button className="publish-card-summary" onClick={() => onSelectEpisode(episode.id)} type="button"><strong>{episode.title}</strong><span>{accountsById.get(episode.account_id)?.name ?? "未知账号"} · {stageLabels[episode.stage]}</span><small>{artifacts.some((artifact) => artifact.episode_id === episode.id && artifact.artifact_type === "publish_package") ? "发布包已固定" : "缺少发布包索引"}</small></button>{episode.stage === "qc_passed" ? <button className="button button-secondary" disabled={!artifacts.some((artifact) => artifact.episode_id === episode.id && artifact.artifact_type === "publish_package") || !tasks.some((task) => task.episode_id === episode.id && task.task_type === "verify_publish_package" && task.status === "completed") || isPending === `transition-${episode.id}-publish_ready`} onClick={() => void onTransition(episode.id, "publish_ready", "已复核固定发布包，进入待发布。")} type="button">进入待发布</button> : episode.stage === "publish_ready" ? <button className="button button-secondary" disabled={isPending === `transition-${episode.id}-publishing_review`} onClick={() => void onTransition(episode.id, "publishing_review", "发布包已固定，等待 Owner 的人工发布确认。")} type="button">进入发布确认</button> : <PublicationConfirmationForm episode={episode} isPending={isPending === `transition-${episode.id}-published`} onConfirm={onTransition} />}</article>)}</div>{queue.length === 0 ? <div className="empty-state compact"><h2>没有待确认发布</h2><p>完成 QC 后，先在外置媒体库运行发布包生成；发布包被索引后才能进入待发布。</p></div> : null}</>;
+}
+
+function PublicationConfirmationForm({ episode, isPending, onConfirm }: { episode: Episode; isPending: boolean; onConfirm: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void> }) {
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [reason, setReason] = useState("");
+  const [formError, setFormError] = useState("");
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setFormError("");
+      const confirmation = createPublicationConfirmation({ acknowledged, reason });
+      void onConfirm(episode.id, "published", confirmation.reason);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "发布确认无效。");
+    }
+  }
+
+  return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => setReason(event.target.value)} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
 function EpisodeDetail({ artifacts, blueprint, episode, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; transitions: Transition[] }) {
