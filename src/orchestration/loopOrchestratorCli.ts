@@ -1,8 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { promisify } from "node:util";
-import { chmod, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { backupFilesToRemove, formatBackupFilename } from "./backupPolicy.js";
+import { formatSnapshotFilename, snapshotTables, type SnapshotTable } from "./backupPolicy.js";
 import { collectNotifications, type AuditEvent, type NotificationCursor } from "./notificationPolicy.js";
 
 const execFileAsync = promisify(execFile);
@@ -10,20 +10,6 @@ const projectRoot = requiredEnvironment("LOOP_PROJECT_ROOT");
 const stateDirectory = process.env.LOOP_N8N_STATE_DIR ?? join(projectRoot, "n8n", "runtime", "orchestration");
 const backupDirectory = join(projectRoot, "n8n", "runtime", "backups");
 const mode = process.argv[2];
-const backupTables = [
-  "accounts",
-  "account_blueprint_versions",
-  "account_memberships",
-  "episodes",
-  "tasks",
-  "artifacts",
-  "approvals",
-  "state_transitions",
-  "audit_events",
-  "experiments",
-  "metric_snapshots",
-  "asset_locks",
-] as const;
 
 try {
   switch (mode) {
@@ -76,7 +62,7 @@ async function runHealthCheck(): Promise<void> {
     check("项目目录", async () => { await stat(projectRoot); }),
     check("Codex CLI", async () => { await execFileAsync("codex", ["--version"]); }),
     check("Supabase 服务", checkSupabase),
-    check("Supabase 逻辑备份", exportLogicalDatabase),
+    check("Supabase 数据快照", exportSupabaseSnapshot),
   ]);
   const passed = checks.every((checkResult) => checkResult.passed);
   if (!passed) {
@@ -113,30 +99,38 @@ async function fetchAuditEvents(cursor: NotificationCursor | null): Promise<Audi
   return payload.flatMap(toAuditEvent);
 }
 
-async function exportLogicalDatabase(): Promise<void> {
+async function exportSupabaseSnapshot(): Promise<void> {
   const { url, serviceRoleKey } = supabaseCredentials();
   const tables: Record<string, unknown[]> = {};
-  for (const table of backupTables) tables[table] = await fetchTableRows(url, serviceRoleKey, table);
+  const snapshotStartedAt = new Date();
+  for (const table of Object.keys(snapshotTables) as SnapshotTable[]) {
+    tables[table] = await fetchTableRows(url, serviceRoleKey, table, snapshotStartedAt);
+  }
 
-  const createdAt = new Date();
   await mkdir(backupDirectory, { recursive: true });
-  const backupPath = join(backupDirectory, formatBackupFilename(createdAt));
-  const temporaryPath = `${backupPath}.next`;
-  await writeFile(temporaryPath, `${JSON.stringify({ version: "supabase-logical-backup/v1", createdAt: createdAt.toISOString(), tables })}\n`, { encoding: "utf8", mode: 0o600 });
+  const snapshotPath = join(backupDirectory, formatSnapshotFilename(snapshotStartedAt));
+  const temporaryPath = `${snapshotPath}.next`;
+  const snapshot = {
+    version: "supabase-rest-snapshot/v1",
+    snapshotStartedAt: snapshotStartedAt.toISOString(),
+    consistency: "best_effort",
+    tables,
+  };
+  await writeFile(temporaryPath, `${JSON.stringify(snapshot)}\n`, { encoding: "utf8", mode: 0o600 });
   await chmod(temporaryPath, 0o600);
-  await rename(temporaryPath, backupPath);
-
-  const oldFiles = backupFilesToRemove(await readdir(backupDirectory), 14);
-  await Promise.all(oldFiles.map((fileName) => rm(join(backupDirectory, fileName))));
+  await rename(temporaryPath, snapshotPath);
 }
 
-async function fetchTableRows(url: string, serviceRoleKey: string, table: string): Promise<unknown[]> {
+async function fetchTableRows(url: string, serviceRoleKey: string, table: SnapshotTable, snapshotStartedAt: Date): Promise<unknown[]> {
   const rows: unknown[] = [];
+  const policy = snapshotTables[table];
   for (let offset = 0; ; offset += 1000) {
     const endpoint = new URL(`/rest/v1/${table}`, url);
     endpoint.searchParams.set("select", "*");
+    endpoint.searchParams.set("order", policy.order);
     endpoint.searchParams.set("limit", "1000");
     endpoint.searchParams.set("offset", String(offset));
+    if (policy.boundaryColumn) endpoint.searchParams.set(policy.boundaryColumn, `lte.${snapshotStartedAt.toISOString()}`);
     const response = await fetch(endpoint, {
       headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}` },
     });

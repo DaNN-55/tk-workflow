@@ -1,19 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { backupFilesToRemove, formatBackupFilename } from "./backupPolicy";
+import { formatSnapshotFilename, snapshotTables } from "./backupPolicy";
 
-describe("Supabase 逻辑备份策略", () => {
+describe("Supabase 数据快照策略", () => {
   it("使用可排序的 UTC 文件名", () => {
-    expect(formatBackupFilename(new Date("2026-08-13T01:02:03.456Z"))).toBe("supabase-2026-08-13T01-02-03-456Z.json");
+    expect(formatSnapshotFilename(new Date("2026-08-13T01:02:03.456Z"))).toBe("supabase-snapshot-2026-08-13T01-02-03-456Z.json");
   });
 
-  it("只删除超过保留数量的匹配备份", () => {
-    const files = [
-      "notes.txt",
-      "supabase-2026-08-12T01-00-00-000Z.json",
-      "supabase-2026-08-13T01-00-00-000Z.json",
-      "supabase-2026-08-11T01-00-00-000Z.json",
-    ];
-
-    expect(backupFilesToRemove(files, 2)).toEqual(["supabase-2026-08-11T01-00-00-000Z.json"]);
+  it("为每张表固定分页排序，且包含 Worker 的付费调用记录", () => {
+    expect(snapshotTables.task_runs).toEqual({ order: "id.asc", boundaryColumn: "started_at" });
+    expect(snapshotTables.account_memberships).toEqual({ order: "account_id.asc,user_id.asc" });
   });
 });

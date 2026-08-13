@@ -33,6 +33,9 @@ export N8N_PERSONALIZATION_ENABLED="false"
 export N8N_TEMPLATES_ENABLED="false"
 export N8N_PUBLIC_API_DISABLED="true"
 export N8N_UNVERIFIED_PACKAGES_ENABLED="false"
+# 仅信任本机 Owner：其可编辑工作流并因此可配置命令节点；n8n 仍只监听 127.0.0.1。
+# 本项目的四条工作流只调用 n8n/run-orchestrator.sh，切勿把此实例暴露给不受信任的用户或网络。
+export NODES_EXCLUDE=""
 export N8N_BLOCK_ENV_ACCESS_IN_NODE="true"
 export N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS="true"
 export N8N_DEFAULT_BINARY_DATA_MODE="filesystem"
