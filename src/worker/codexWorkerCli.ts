@@ -1,9 +1,7 @@
 import { spawn } from "node:child_process";
-import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { access, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { join } from "node:path";
 import { createClient } from "@supabase/supabase-js";
 import {
   runCodexWorker,
@@ -11,10 +9,13 @@ import {
 } from "./codexRunner.js";
 import type { WorkerTaskPackage } from "./contracts.js";
 import type { ArtifactManifest } from "./contracts.js";
+import { verifyArtifactIndex, verifyMediaLibrary } from "./mediaLibrary.js";
 
 const supabaseUrl = requiredEnvironment("SUPABASE_URL");
 const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
 const actualCostCents = nonNegativeIntegerEnvironment("CODEX_WORKER_ACTUAL_COST_CENTS");
+const mediaLibraryMountPath = requiredEnvironment("MEDIA_LIBRARY_MOUNT_PATH");
+const mediaLibraryMinimumFreeBytes = nonNegativeIntegerEnvironment("MEDIA_LIBRARY_MIN_FREE_BYTES");
 const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 
 const result = await runCodexWorker({
@@ -63,23 +64,15 @@ async function reportResult(taskId: string, attempt: number, workerResult: unkno
 }
 
 async function verifyAssetRoot(allowedAssetRoot: string): Promise<void> {
-  const details = await stat(allowedAssetRoot);
-  if (!details.isDirectory()) throw new Error("资产根目录不是目录。");
-  await access(allowedAssetRoot, constants.R_OK | constants.W_OK);
+  await verifyMediaLibrary({
+    assetRoot: allowedAssetRoot,
+    mountPath: mediaLibraryMountPath,
+    minimumFreeBytes: mediaLibraryMinimumFreeBytes,
+  });
 }
 
 async function verifyArtifacts(taskPackage: WorkerTaskPackage, artifacts: ArtifactManifest[]): Promise<void> {
-  const root = resolve(taskPackage.assets.allowedRoot);
-  for (const artifact of artifacts) {
-    const artifactPath = resolve(root, artifact.relativePath);
-    if (relative(root, artifactPath).startsWith("..")) throw new Error(`产物路径越出资产根目录：${artifact.relativePath}`);
-    const details = await stat(artifactPath);
-    if (!details.isFile()) throw new Error(`产物不是文件：${artifact.relativePath}`);
-    if (details.size !== artifact.fileSize) throw new Error(`产物文件大小不匹配：${artifact.relativePath}`);
-    const contents = await readFile(artifactPath);
-    const sha256 = createHash("sha256").update(contents).digest("hex");
-    if (sha256 !== artifact.sha256) throw new Error(`产物 SHA-256 不匹配：${artifact.relativePath}`);
-  }
+  await verifyArtifactIndex({ assetRoot: taskPackage.assets.allowedRoot, episodeId: taskPackage.episode.id, artifacts });
 }
 
 async function executeCodex(taskPackage: WorkerTaskPackage): Promise<string> {

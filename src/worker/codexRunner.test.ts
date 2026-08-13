@@ -76,6 +76,34 @@ describe("本地 Codex Worker runner", () => {
     }));
   });
 
+  it("输入产物校验失败时写入 blocked，不调用 Codex", async () => {
+    const execute = vi.fn();
+    const reportResult = vi.fn().mockResolvedValue(undefined);
+
+    await expect(runCodexWorker({
+      claimNextTask: async () => ({
+        ...claimedTask,
+        inputSnapshot: {
+          ...claimedTask.inputSnapshot,
+          input_artifacts: [{ artifactType: "research_notes", relativePath: "episodes/episode-1/research.md", sha256: "a".repeat(64), fileSize: 128 }],
+        },
+      }),
+      reportResult,
+      execute,
+      actualCostCents: 0,
+      verifyAssetRoot: async () => undefined,
+      verifyArtifacts: async (_taskPackage, artifacts) => {
+        if (artifacts[0]?.artifactType === "research_notes") throw new Error("research.md 的 SHA-256 不匹配。");
+      },
+    })).resolves.toEqual({ status: "blocked", taskId: "task-1" });
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(reportResult).toHaveBeenCalledWith("task-1", 0, expect.objectContaining({
+      status: "blocked",
+      blockers: [expect.objectContaining({ code: "input_artifacts_invalid" })],
+    }));
+  });
+
   it("产物文件无法验证时不回写 completed，而是回写 failed", async () => {
     const reportResult = vi.fn().mockResolvedValue(undefined);
     const execute = vi.fn().mockResolvedValue(JSON.stringify({
@@ -95,7 +123,9 @@ describe("本地 Codex Worker runner", () => {
       reportResult,
       execute,
       verifyAssetRoot: async () => undefined,
-      verifyArtifacts: async () => { throw new Error("brief.md 的 SHA-256 不匹配。"); },
+      verifyArtifacts: async (_taskPackage, artifacts) => {
+        if (artifacts.length > 0) throw new Error("brief.md 的 SHA-256 不匹配。");
+      },
       actualCostCents: 0,
     })).resolves.toEqual({ status: "failed", taskId: "task-1" });
 
