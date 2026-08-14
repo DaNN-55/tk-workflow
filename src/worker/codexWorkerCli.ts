@@ -19,6 +19,65 @@ const mediaLibraryMountPath = requiredEnvironment("MEDIA_LIBRARY_MOUNT_PATH");
 const mediaLibraryMinimumFreeBytes = nonNegativeIntegerEnvironment("MEDIA_LIBRARY_MIN_FREE_BYTES");
 const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 
+const workerResultJsonSchema = {
+  type: "object",
+  additionalProperties: false,
+  required: ["version", "taskId", "status", "artifacts", "validation", "actualCostCents", "blockers", "retry", "nextStep"],
+  properties: {
+    version: { type: "string", const: "worker-result/v1" },
+    taskId: { type: "string" },
+    status: { type: "string", enum: ["completed", "blocked", "failed"] },
+    artifacts: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["artifactType", "relativePath", "sha256", "fileSize"],
+        properties: {
+          artifactType: { type: "string" },
+          relativePath: { type: "string" },
+          sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
+          fileSize: { type: "integer", minimum: 0 },
+        },
+      },
+    },
+    validation: {
+      type: "object",
+      additionalProperties: false,
+      required: ["passed", "checks"],
+      properties: {
+        passed: { type: "boolean" },
+        checks: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["name", "passed", "detail"],
+            properties: { name: { type: "string" }, passed: { type: "boolean" }, detail: { type: "string" } },
+          },
+        },
+      },
+    },
+    actualCostCents: { type: "integer", minimum: 0 },
+    blockers: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["code", "detail"],
+        properties: { code: { type: "string" }, detail: { type: "string" } },
+      },
+    },
+    retry: {
+      type: "object",
+      additionalProperties: false,
+      required: ["shouldRetry", "reason"],
+      properties: { shouldRetry: { type: "boolean" }, reason: { type: "string" } },
+    },
+    nextStep: { type: "string" },
+  },
+} as const;
+
 const result = await runCodexWorker({
   claimNextTask: claimNextTask,
   reportResult,
@@ -83,10 +142,10 @@ async function executeCodex(taskPackage: WorkerTaskPackage): Promise<string> {
   try {
     await writeFile(schemaPath, JSON.stringify(workerResultJsonSchema));
     await runCommand("codex", [
+      "--ask-for-approval", "never",
       "exec",
       "--ephemeral",
       "--sandbox", "workspace-write",
-      "--approve-for-me",
       "--skip-git-repo-check",
       "--cd", taskPackage.assets.allowedRoot,
       "--model", taskPackage.model,
@@ -106,7 +165,8 @@ function buildCodexPrompt(taskPackage: WorkerTaskPackage): string {
     "Work only inside assets.allowedRoot. Do not inspect, modify, or transmit files outside that directory.",
     "Do not approve, publish, change any blueprint, call platform APIs, or change an Episode stage.",
     "If any required input, tool, permission, or rule is missing, return status blocked with explicit blockers; do not silently substitute a provider.",
-    "Create only the required artifacts and return a JSON result that matches the provided schema. Use paths relative to assets.allowedRoot and SHA-256 hashes in lowercase hexadecimal.",
+    `Create only the required artifacts inside episodes/${taskPackage.episode.id}/ and return a JSON result that matches the provided schema. Use paths relative to assets.allowedRoot and SHA-256 hashes in lowercase hexadecimal.`,
+    "The retry reason must always be non-empty. For a completed result, set retry.shouldRetry to false and retry.reason to Completed successfully.",
     "Task package:",
     JSON.stringify(taskPackage),
   ].join("\n\n");
@@ -124,62 +184,3 @@ function runCommand(command: string, argumentsList: string[]): Promise<void> {
     });
   });
 }
-
-const workerResultJsonSchema = {
-  type: "object",
-  additionalProperties: false,
-  required: ["version", "taskId", "status", "artifacts", "validation", "actualCostCents", "blockers", "retry", "nextStep"],
-  properties: {
-    version: { type: "string", const: "worker-result/v1" },
-    taskId: { type: "string" },
-    status: { type: "string", enum: ["completed", "blocked", "failed"] },
-    artifacts: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["artifactType", "relativePath", "sha256", "fileSize"],
-        properties: {
-          artifactType: { type: "string" },
-          relativePath: { type: "string" },
-          sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
-          fileSize: { type: "integer", minimum: 0 },
-        },
-      },
-    },
-    validation: {
-      type: "object",
-      additionalProperties: false,
-      required: ["passed", "checks"],
-      properties: {
-        passed: { type: "boolean" },
-        checks: {
-          type: "array",
-          items: {
-            type: "object",
-            additionalProperties: false,
-            required: ["name", "passed", "detail"],
-            properties: { name: { type: "string" }, passed: { type: "boolean" }, detail: { type: "string" } },
-          },
-        },
-      },
-    },
-    actualCostCents: { type: "integer", minimum: 0 },
-    blockers: {
-      type: "array",
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["code", "detail"],
-        properties: { code: { type: "string" }, detail: { type: "string" } },
-      },
-    },
-    retry: {
-      type: "object",
-      additionalProperties: false,
-      required: ["shouldRetry", "reason"],
-      properties: { shouldRetry: { type: "boolean" }, reason: { type: "string" } },
-    },
-    nextStep: { type: "string" },
-  },
-} as const;

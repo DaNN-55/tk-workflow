@@ -38,6 +38,14 @@ describe("外置媒体库", () => {
     })).resolves.toBeUndefined();
   });
 
+  it("空输入产物不要求预先创建 Episode 目录", async () => {
+    const assetRoot = await mkdtemp(join(tmpdir(), "tk-workflow-media-library-"));
+    directories.push(assetRoot);
+    await mkdir(join(assetRoot, "episodes"));
+
+    await expect(verifyArtifactIndex({ assetRoot, episodeId: "episode-1", artifacts: [] })).resolves.toBeUndefined();
+  });
+
   it("在挂载点缺失时阻止 Worker 使用媒体库", async () => {
     const assetRoot = await mkdtemp(join(tmpdir(), "tk-workflow-media-library-"));
     directories.push(assetRoot);

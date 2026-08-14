@@ -53,6 +53,7 @@ export async function verifyMediaLibrary(input: MediaLibraryCheckInput): Promise
 export async function verifyArtifactIndex(input: ArtifactIndexCheckInput): Promise<void> {
   if (!isSafePathSegment(input.episodeId)) throw new Error("Episode 标识不能用作媒体目录名。");
   const assetRoot = await directoryPath(input.assetRoot, "媒体库账号目录");
+  if (input.artifacts.length === 0) return;
   const episodeDirectory = await directoryPath(join(assetRoot, "episodes", input.episodeId), "当前 Episode 目录");
 
   for (const artifact of input.artifacts) {
