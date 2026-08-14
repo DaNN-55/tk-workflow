@@ -2,6 +2,7 @@ import {
   createWorkerTaskPackage,
   type ArtifactManifest,
   type WorkerResult,
+  type WorkerTaskPackageInput,
   type WorkerTaskPackage,
   validateWorkerResult,
 } from "./contracts.js";
@@ -77,6 +78,7 @@ export async function runCodexWorker(dependencies: CodexWorkerDependencies): Pro
 
 function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
   const snapshot = isRecord(task.inputSnapshot) ? task.inputSnapshot : {};
+  const output = outputContract(snapshot);
   return createWorkerTaskPackage({
     task: {
       id: task.taskId,
@@ -94,8 +96,10 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
       blueprintVersionId: task.blueprintVersionId,
       title: task.title,
     },
+    capability: requiredString(snapshot.capability, "任务缺少能力声明。"),
+    allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
-    output: { requiredArtifactTypes: requiredArtifactTypes(snapshot) },
+    output,
     inputArtifacts: inputArtifacts(snapshot),
   });
 }
@@ -106,10 +110,15 @@ function parseCodexOutput(output: string, actualCostCents: number): unknown {
   return { ...parsed, actualCostCents };
 }
 
-function requiredArtifactTypes(snapshot: Record<string, unknown>): string[] {
+function outputContract(snapshot: Record<string, unknown>): WorkerTaskPackageInput["output"] {
   const output = snapshot.output;
-  if (!isRecord(output) || !Array.isArray(output.required_artifact_types)) throw new Error("任务缺少输出产物 Schema。");
-  return output.required_artifact_types.filter((artifactType): artifactType is string => typeof artifactType === "string");
+  if (!isRecord(output)) throw new Error("任务缺少输出产物 Schema。");
+  return {
+    requiredArtifactTypes: stringArray(output.required_artifact_types, "任务缺少输出产物 Schema。"),
+    contentType: requiredString(output.content_type, "任务缺少输出内容类型。"),
+    relativePath: requiredString(output.relative_path, "任务缺少冻结输出路径。"),
+    reviewStage: requiredString(output.review_stage, "任务缺少输出审核阶段。"),
+  };
 }
 
 function inputArtifacts(snapshot: Record<string, unknown>): ArtifactManifest[] {
@@ -117,6 +126,16 @@ function inputArtifacts(snapshot: Record<string, unknown>): ArtifactManifest[] {
   if (artifacts === undefined) return [];
   if (!Array.isArray(artifacts)) throw new Error("任务输入产物清单格式无效。");
   return artifacts as ArtifactManifest[];
+}
+
+function requiredString(value: unknown, message: string): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error(message);
+  return value;
+}
+
+function stringArray(value: unknown, message: string): string[] {
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || !item.trim())) throw new Error(message);
+  return value as string[];
 }
 
 function createBlockedResult(taskId: string, actualCostCents: number, error: unknown, code = "task_package_invalid"): WorkerResult {

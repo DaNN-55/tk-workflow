@@ -15,7 +15,12 @@ const claimedTask = {
   blueprintVersionId: "blueprint-1",
   title: "一个可验证的选题",
   allowedAssetRoot: "/Volumes/Media/tk-workflow/account-1",
-  inputSnapshot: { output: { required_artifact_types: ["brief"] }, input_artifacts: [] },
+  inputSnapshot: {
+    capability: "visual_planning",
+    allowed_tools: ["read", "write"],
+    output: { required_artifact_types: ["brief"], content_type: "text/markdown", relative_path: "episodes/episode-1/brief.md", review_stage: "visual_review" },
+    input_artifacts: [],
+  },
 };
 
 describe("本地 Codex Worker runner", () => {

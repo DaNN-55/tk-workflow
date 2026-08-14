@@ -17,6 +17,7 @@ type Episode = Database["public"]["Tables"]["episodes"]["Row"];
 type Series = Database["public"]["Tables"]["series"]["Row"];
 type SeriesVersion = Database["public"]["Tables"]["series_versions"]["Row"];
 type MaterialRevision = Database["public"]["Tables"]["production_material_revisions"]["Row"];
+type ReviewPackage = Database["public"]["Tables"]["review_packages"]["Row"];
 type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
 type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
@@ -52,6 +53,7 @@ interface Workspace {
   series: Series[];
   seriesVersions: SeriesVersion[];
   materialRevisions: MaterialRevision[];
+  reviewPackages: ReviewPackage[];
   artifacts: Artifact[];
   tasks: Task[];
   transitions: Transition[];
@@ -149,9 +151,9 @@ function isSafeRelativePath(relativePath: string): boolean {
   return relativePath.length > 0 && !relativePath.split(/[\\/]/).some((segment) => !segment || segment === "." || segment === "..");
 }
 
-function localArtifactUrl(episodeId: string, relativePath: string): string | null {
+function localArtifactUrl(episodeId: string, relativePath: string, expectedSha256?: string): string | null {
   if (!episodeId || !isSafeRelativePath(relativePath)) return null;
-  return `/_local-artifact?${new URLSearchParams({ episode: episodeId, path: relativePath }).toString()}`;
+  return `/_local-artifact?${new URLSearchParams({ episode: episodeId, path: relativePath, ...(expectedSha256 ? { sha256: expectedSha256 } : {}) }).toString()}`;
 }
 
 function artifactPreviewKind(relativePath: string): "image" | "video" | null {
@@ -170,13 +172,14 @@ function bytesToBase64(content: Uint8Array): string {
 }
 
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
     supabase.from("series").select("*").order("name"),
     supabase.from("series_versions").select("*").order("version", { ascending: false }),
     supabase.from("production_material_revisions").select("*").order("created_at", { ascending: false }),
+    supabase.from("review_packages").select("*").order("created_at", { ascending: false }),
     supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
     supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
@@ -185,7 +188,7 @@ async function loadWorkspace(): Promise<Workspace> {
     supabase.from("metric_snapshots").select("*").order("captured_at", { ascending: false }),
     supabase.from("blueprint_change_suggestions").select("*").order("created_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -198,6 +201,7 @@ async function loadWorkspace(): Promise<Workspace> {
     series: seriesResult.data ?? [],
     seriesVersions: seriesVersionsResult.data ?? [],
     materialRevisions: materialRevisionsResult.data ?? [],
+    reviewPackages: reviewPackagesResult.data ?? [],
     artifacts: artifactsResult.data ?? [],
     tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
@@ -724,6 +728,7 @@ export function App() {
             onTransition={transitionEpisode}
             onUpdateTitle={updateEpisodeTitle}
             materialRevisions={workspace.materialRevisions}
+            reviewPackages={workspace.reviewPackages}
             tasks={workspace.tasks}
             transitions={workspace.transitions}
           />
@@ -902,12 +907,14 @@ function PublicationConfirmationForm({ episode, isPending, onConfirm }: { episod
   return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => setReason(event.target.value)} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
-export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onImportMaterial, onTransition, onUpdateTitle, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; tasks: Task[]; transitions: Transition[] }) {
+export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onImportMaterial, onTransition, onUpdateTitle, reviewPackages, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
   const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
   const episodeMaterials = materialRevisions.filter((revision) => revision.episode_id === episode.id);
   const history = transitions.filter((transition) => transition.episode_id === episode.id);
   const blockers = workerBlockers(tasks, episode.id);
   const reviewAction = reviewActionFor(episode.stage);
+  const reviewPackage = reviewPackages.find((candidate) => candidate.episode_id === episode.id);
+  const reviewArtifact = reviewPackage ? episodeArtifacts.find((candidate) => candidate.id === reviewPackage.artifact_id) : null;
   const [directoryMessage, setDirectoryMessage] = useState("");
 
   async function copyEpisodeId() {
@@ -928,6 +935,7 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     <section className="review-section"><h3>生产材料修订</h3>{episodeMaterials.length ? episodeMaterials.map((revision) => <div className="material-revision" key={revision.id}><strong>{revision.is_main_script ? "主脚本" : revision.material_type} · v{revision.revision_number}</strong><span>{revision.source_kind} · {revision.source_path}</span><code>{revision.sha256.slice(0, 12)}… · {revision.storage_path}</code></div>) : <p className="muted-copy">还没有导入材料修订。</p>}</section>
     <div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div>
     <ArtifactPreview artifacts={episodeArtifacts} />
+    {reviewPackage && reviewArtifact ? <TextReviewPackage artifact={reviewArtifact} reviewPackage={reviewPackage} /> : null}
     <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
     {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
     {reviewAction ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} reviewAction={reviewAction} /> : null}
@@ -983,6 +991,72 @@ function MaterialImportForm({ episodeId, isPending, onImport }: { episodeId: str
   }
 
   return <form className="review-section material-import" onSubmit={submit}><h3>导入生产材料</h3><label>来源<select aria-label="材料来源" onChange={(event) => setSourceKind(event.target.value as MaterialImportRequest["sourceKind"])} value={sourceKind}><option value="directory">项目输入目录</option><option value="file">文件选择</option><option value="paste">粘贴内容</option></select></label><label>材料类型<select aria-label="材料类型" onChange={(event) => { const nextType = event.target.value; setMaterialType(nextType); if (nextType !== "script") setIsMainScript(false); }} value={materialType}><option value="script">脚本</option><option value="reference">参考材料</option><option value="image">图片</option><option value="audio">音频</option><option value="video">视频</option></select></label>{sourceKind === "file" ? <label>选择文件<input aria-label="选择生产材料文件" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} type="file" /></label> : sourceKind === "paste" ? <><label>来源名称<input aria-label="粘贴内容来源名称" onChange={(event) => setSourcePath(event.target.value)} placeholder="pasted-script.txt" value={sourcePath} /></label><label>粘贴内容<textarea aria-label="粘贴的生产材料" onChange={(event) => setPastedContent(event.target.value)} rows={7} value={pastedContent} /></label></> : <label>输入目录内路径<input aria-label="输入目录文件路径" onChange={(event) => setSourcePath(event.target.value)} placeholder="script.md" value={sourcePath} /></label>}<label className="checkbox-label"><input checked={isMainScript} disabled={materialType !== "script"} onChange={(event) => setIsMainScript(event.target.checked)} type="checkbox" />将此修订设为主脚本</label>{isMainScript ? <label className="checkbox-label confirmation"><input checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" />我已检查内容，明确确认这是本生产单的主脚本。</label> : null}<button className="button button-primary" disabled={isPending} type="submit">{isPending ? "导入中…" : "确认并固定修订"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
+}
+
+interface FrozenReviewContext {
+  allowedTools: string[];
+  artifactRelativePath: string;
+  artifactSha256: string;
+  budgetLimitCents: number;
+  capability: string;
+  contentType: string;
+  model: string;
+  provider: string;
+  requiredArtifactTypes: string[];
+  scriptSha256: string;
+}
+
+function parseFrozenReviewContext(snapshot: Json): FrozenReviewContext | null {
+  if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object") return null;
+  const executor = snapshot.executor;
+  const artifact = snapshot.artifact;
+  const budget = snapshot.budget;
+  const output = snapshot.output;
+  const scriptRevision = snapshot.script_revision;
+  if (!executor || Array.isArray(executor) || typeof executor !== "object" || !artifact || Array.isArray(artifact) || typeof artifact !== "object" || !budget || Array.isArray(budget) || typeof budget !== "object" || !output || Array.isArray(output) || typeof output !== "object" || !scriptRevision || Array.isArray(scriptRevision) || typeof scriptRevision !== "object") return null;
+  const budgetLimitCents = budget.limit_cents;
+  if (typeof snapshot.capability !== "string" || typeof artifact.relative_path !== "string" || typeof artifact.sha256 !== "string" || typeof executor.provider !== "string" || typeof executor.model !== "string" || typeof budgetLimitCents !== "number" || !Number.isInteger(budgetLimitCents) || budgetLimitCents < 0 || !Array.isArray(snapshot.allowed_tools) || snapshot.allowed_tools.some((tool) => typeof tool !== "string") || typeof output.content_type !== "string" || !Array.isArray(output.required_artifact_types) || output.required_artifact_types.some((artifactType) => typeof artifactType !== "string") || typeof scriptRevision.sha256 !== "string") return null;
+  return {
+    allowedTools: snapshot.allowed_tools as string[],
+    artifactRelativePath: artifact.relative_path,
+    artifactSha256: artifact.sha256,
+    budgetLimitCents,
+    capability: snapshot.capability,
+    contentType: output.content_type,
+    model: executor.model,
+    provider: executor.provider,
+    requiredArtifactTypes: output.required_artifact_types as string[],
+    scriptSha256: scriptRevision.sha256,
+  };
+}
+
+function TextReviewPackage({ artifact, reviewPackage }: { artifact: Artifact; reviewPackage: ReviewPackage }) {
+  const [content, setContent] = useState("");
+  const [error, setError] = useState("");
+  const context = parseFrozenReviewContext(reviewPackage.context_snapshot);
+  const artifactMatchesContext = context?.artifactRelativePath === artifact.relative_path && context.artifactSha256 === artifact.sha256;
+  const source = artifactMatchesContext ? localArtifactUrl(artifact.episode_id, context.artifactRelativePath, context.artifactSha256) : null;
+
+  useEffect(() => {
+    let isCurrent = true;
+    async function loadText() {
+      if (!source) throw new Error("文本产物路径无效。");
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !data.session) throw new Error("需要 Owner 登录会话。");
+      const response = await fetch(source, { headers: { Authorization: `Bearer ${data.session.access_token}` } });
+      if (!response.ok) throw new Error("无法读取文本产物。");
+      const nextContent = await response.text();
+      if (isCurrent) setContent(nextContent);
+    }
+    setContent("");
+    setError("");
+    void loadText().catch((cause: unknown) => {
+      if (isCurrent) setError(cause instanceof Error ? cause.message : "无法读取文本产物。");
+    });
+    return () => { isCurrent = false; };
+  }, [source]);
+
+  return <section className="review-section text-review-package"><h3>可审核文本 · 修订 v{reviewPackage.revision_number}</h3>{error ? <p className="form-error">{error}</p> : content ? <pre>{content}</pre> : <p className="muted-copy">正在读取文本产物…</p>}<h4>冻结审核上下文</h4>{context ? <dl><div><dt>主脚本 SHA-256</dt><dd>{context.scriptSha256.slice(0, 12)}…</dd></div><div><dt>能力</dt><dd>{context.capability}</dd></div><div><dt>执行器</dt><dd>{context.provider} · <span>{context.model}</span></dd></div><div><dt>预算</dt><dd>{context.budgetLimitCents} 分</dd></div><div><dt>允许工具</dt><dd>{context.allowedTools.join("、") || "无"}</dd></div><div><dt>输出契约</dt><dd>{context.contentType} · {context.requiredArtifactTypes.join("、")}</dd></div></dl> : <p className="form-error">冻结审核上下文格式无效。</p>}</section>;
 }
 
 function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {

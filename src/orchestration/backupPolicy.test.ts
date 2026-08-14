@@ -8,6 +8,7 @@ describe("Supabase 数据快照策略", () => {
 
   it("为每张表固定分页排序，且包含 Worker 的付费调用记录", () => {
     expect(snapshotTables.task_runs).toEqual({ order: "id.asc", boundaryColumn: "started_at" });
+    expect(snapshotTables.review_packages).toEqual({ order: "id.asc", boundaryColumn: "created_at" });
     expect(snapshotTables.account_memberships).toEqual({ order: "account_id.asc,user_id.asc" });
   });
 });

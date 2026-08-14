@@ -27,9 +27,14 @@ export interface WorkerTaskPackageInput {
     blueprintVersionId: string;
     title: string;
   };
+  capability: string;
+  allowedTools: string[];
   allowedAssetRoot: string;
   output: {
     requiredArtifactTypes: string[];
+    contentType: string;
+    relativePath: string;
+    reviewStage: string;
   };
   inputArtifacts: ArtifactManifest[];
 }
@@ -39,6 +44,8 @@ export interface WorkerTaskPackage {
   provider: "codex";
   model: string;
   promptVersion: string;
+  capability: string;
+  allowedTools: readonly string[];
   task: Pick<WorkerTaskPackageInput["task"], "id" | "type">;
   accountId: string;
   episode: WorkerTaskPackageInput["episode"];
@@ -48,6 +55,9 @@ export interface WorkerTaskPackage {
   };
   output: {
     requiredArtifactTypes: readonly string[];
+    contentType: string;
+    relativePath: string;
+    reviewStage: string;
   };
   budget: {
     limitCents: number;
@@ -84,7 +94,10 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
   if (!Number.isInteger(input.task.attempt) || input.task.attempt < 0 || input.task.attempt >= input.task.maxAttempts) throw new Error("attempt must be lower than maxAttempts.");
   if (!input.task.model.trim() || !input.task.promptVersion.trim()) throw new Error("model and promptVersion are required.");
   if (!isNonEmptyString(input.task.type)) throw new Error("task type is required.");
+  if (!isNonEmptyString(input.capability)) throw new Error("capability is required.");
+  if (input.allowedTools.some((tool) => !isNonEmptyString(tool))) throw new Error("allowedTools must contain non-empty names.");
   if (input.output.requiredArtifactTypes.length === 0 || input.output.requiredArtifactTypes.some((artifactType) => !isNonEmptyString(artifactType))) throw new Error("至少需要一个输出产物类型。");
+  if (!isNonEmptyString(input.output.contentType) || !isNonEmptyString(input.output.reviewStage) || !isSafeRelativePath(input.output.relativePath)) throw new Error("输出契约缺少有效的内容类型、路径或审核阶段。");
 
   input.inputArtifacts.forEach(assertArtifactManifest);
 
@@ -93,11 +106,13 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     provider: input.task.provider,
     model: input.task.model,
     promptVersion: input.task.promptVersion,
+    capability: input.capability,
+    allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
     accountId: input.episode.accountId,
     episode: input.episode,
     assets: { allowedRoot: input.allowedAssetRoot, inputs: input.inputArtifacts },
-    output: { requiredArtifactTypes: [...new Set(input.output.requiredArtifactTypes)] },
+    output: { requiredArtifactTypes: [...new Set(input.output.requiredArtifactTypes)], contentType: input.output.contentType, relativePath: input.output.relativePath, reviewStage: input.output.reviewStage },
     budget: { limitCents: input.task.budgetLimitCents, maxAttempts: input.task.maxAttempts, attempt: input.task.attempt },
     forbiddenActions,
   };
@@ -126,6 +141,9 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
   }
   if (value.status === "completed" && !taskPackage.output.requiredArtifactTypes.every((artifactType) => artifacts.some((artifact) => artifact.artifactType === artifactType))) {
     throw new Error("已完成结果缺少必需产物。");
+  }
+  if (value.status === "completed" && !artifacts.some((artifact) => artifact.artifactType === taskPackage.output.requiredArtifactTypes[0] && artifact.relativePath === taskPackage.output.relativePath)) {
+    throw new Error("已完成结果未使用任务包冻结输出路径。");
   }
   if (value.status === "blocked" && value.blockers.length === 0) throw new Error("blocked 结果必须包含 blockers。");
   if ((value.status === "completed" || value.status === "blocked") && value.retry.shouldRetry) throw new Error("已完成或 blocked 结果不能请求重试。");

@@ -163,9 +163,10 @@ function buildCodexPrompt(taskPackage: WorkerTaskPackage): string {
   return [
     "You are the Codex Content Worker for a controlled production platform.",
     "Work only inside assets.allowedRoot. Do not inspect, modify, or transmit files outside that directory.",
+    "Use only the tools listed in allowedTools. If the task cannot be completed with them, return blocked instead of substituting another tool.",
     "Do not approve, publish, change any blueprint, call platform APIs, or change an Episode stage.",
     "If any required input, tool, permission, or rule is missing, return status blocked with explicit blockers; do not silently substitute a provider.",
-    `Create only the required artifacts inside episodes/${taskPackage.episode.id}/ and return a JSON result that matches the provided schema. Use paths relative to assets.allowedRoot and SHA-256 hashes in lowercase hexadecimal.`,
+    `Create the required artifact at output.relativePath inside episodes/${taskPackage.episode.id}/ and return a JSON result that matches the provided schema. Use paths relative to assets.allowedRoot and SHA-256 hashes in lowercase hexadecimal.`,
     "The retry reason must always be non-empty. For a completed result, set retry.shouldRetry to false and retry.reason to Completed successfully.",
     "Task package:",
     JSON.stringify(taskPackage),

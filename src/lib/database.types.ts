@@ -118,6 +118,7 @@ export type Database = {
           episode_id: string
           id: string
           reason: string
+          review_package_id: string | null
           stage: Database["public"]["Enums"]["episode_stage"]
         }
         Insert: {
@@ -127,6 +128,7 @@ export type Database = {
           episode_id: string
           id?: string
           reason: string
+          review_package_id?: string | null
           stage: Database["public"]["Enums"]["episode_stage"]
         }
         Update: {
@@ -136,6 +138,7 @@ export type Database = {
           episode_id?: string
           id?: string
           reason?: string
+          review_package_id?: string | null
           stage?: Database["public"]["Enums"]["episode_stage"]
         }
         Relationships: [
@@ -144,6 +147,13 @@ export type Database = {
             columns: ["episode_id"]
             isOneToOne: false
             referencedRelation: "episodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "approvals_review_package_id_fkey"
+            columns: ["review_package_id"]
+            isOneToOne: true
+            referencedRelation: "review_packages"
             referencedColumns: ["id"]
           },
         ]
@@ -566,6 +576,71 @@ export type Database = {
           },
         ]
       }
+      review_packages: {
+        Row: {
+          artifact_id: string
+          context_snapshot: Json
+          created_at: string
+          episode_id: string
+          id: string
+          revision_number: number
+          stage: Database["public"]["Enums"]["episode_stage"]
+          task_id: string
+          task_run_id: string
+        }
+        Insert: {
+          artifact_id: string
+          context_snapshot: Json
+          created_at?: string
+          episode_id: string
+          id?: string
+          revision_number: number
+          stage: Database["public"]["Enums"]["episode_stage"]
+          task_id: string
+          task_run_id: string
+        }
+        Update: {
+          artifact_id?: string
+          context_snapshot?: Json
+          created_at?: string
+          episode_id?: string
+          id?: string
+          revision_number?: number
+          stage?: Database["public"]["Enums"]["episode_stage"]
+          task_id?: string
+          task_run_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "review_packages_artifact_id_fkey"
+            columns: ["artifact_id"]
+            isOneToOne: false
+            referencedRelation: "artifacts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "review_packages_episode_id_fkey"
+            columns: ["episode_id"]
+            isOneToOne: false
+            referencedRelation: "episodes"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "review_packages_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "tasks"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "review_packages_task_run_id_fkey"
+            columns: ["task_run_id"]
+            isOneToOne: false
+            referencedRelation: "task_runs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       series: {
         Row: { account_id: string; created_at: string; id: string; name: string }
         Insert: { account_id: string; created_at?: string; id?: string; name: string }
@@ -837,6 +912,10 @@ export type Database = {
         }
         Returns: Database["public"]["Tables"]["production_material_revisions"]["Row"]
         SetofOptions: { from: "*"; to: "production_material_revisions"; isOneToOne: true; isSetofReturn: false }
+      }
+      orchestrate_provided_script_tasks: {
+        Args: Record<PropertyKey, never>
+        Returns: Database["public"]["Tables"]["tasks"]["Row"][]
       }
       update_episode_title: {
         Args: { p_episode_id: string; p_title: string }

@@ -5,6 +5,15 @@ export const defaultBlueprintPolicy = {
   positioning: "",
   approval_gates: ["script", "visual", "storyboard", "qc", "publish"],
   asset_root: "",
+  allowed_tools: ["read", "write"],
+  budgets: { visual_planning_cents: 0 },
+  executors: {
+    visual_planning: {
+      provider: "codex",
+      model: "gpt-5.6-codex",
+      prompt_version: "visual-planning-v1",
+    },
+  },
 };
 
 export function parseBlueprintPolicy(source: string): Json {

@@ -54,6 +54,7 @@ function serveLocalArtifact(supabaseUrl: string | undefined, supabasePublishable
   const url = new URL(request.url ?? "", "http://127.0.0.1");
   const episodeId = url.searchParams.get("episode") ?? "";
   const relativePath = url.searchParams.get("path") ?? "";
+  const expectedSha256 = url.searchParams.get("sha256");
   const authorization = request.headers.authorization;
   if (!authorization?.startsWith("Bearer ")) {
     response.statusCode = 401;
@@ -67,14 +68,19 @@ function serveLocalArtifact(supabaseUrl: string | undefined, supabasePublishable
   }
 
   try {
-    const assetRoot = await assetRootForIndexedArtifact({ authorization, episodeId, relativePath, supabasePublishableKey, supabaseUrl });
-    if (!assetRoot || !isAbsolute(assetRoot)) {
+    const indexedArtifact = await indexedArtifactForPreview({ authorization, episodeId, relativePath, supabasePublishableKey, supabaseUrl });
+    if (!indexedArtifact || !isAbsolute(indexedArtifact.assetRoot)) {
       response.statusCode = 404;
       response.end("未找到可预览产物。");
       return;
     }
-    const resolvedRoot = await fs.realpath(assetRoot);
-    const resolvedArtifact = await fs.realpath(`${assetRoot}/${relativePath}`);
+    if (expectedSha256 && (expectedSha256 !== indexedArtifact.sha256 || !/^[0-9a-f]{64}$/.test(expectedSha256))) {
+      response.statusCode = 409;
+      response.end("产物修订与索引不一致。");
+      return;
+    }
+    const resolvedRoot = await fs.realpath(indexedArtifact.assetRoot);
+    const resolvedArtifact = await fs.realpath(`${indexedArtifact.assetRoot}/${relativePath}`);
     if (!isDescendant(resolvedRoot, resolvedArtifact)) {
       response.statusCode = 403;
       response.end("产物路径超出账号资产目录。");
@@ -86,6 +92,14 @@ function serveLocalArtifact(supabaseUrl: string | undefined, supabasePublishable
       response.statusCode = 404;
       response.end("未找到可预览产物。");
       return;
+    }
+    if (expectedSha256) {
+      const actualSha256 = createHash("sha256").update(await fs.readFile(resolvedArtifact)).digest("hex");
+      if (actualSha256 !== expectedSha256) {
+        response.statusCode = 409;
+        response.end("产物内容与冻结修订不一致。");
+        return;
+      }
     }
 
     response.setHeader("Content-Type", mediaTypes[extname(resolvedArtifact).toLowerCase()] ?? "application/octet-stream");
@@ -292,11 +306,11 @@ export function serveProductionMaterial(supabaseUrl: string | undefined, supabas
   };
 }
 
-async function assetRootForIndexedArtifact(input: { authorization: string; episodeId: string; relativePath: string; supabasePublishableKey: string | undefined; supabaseUrl: string | undefined }): Promise<string | null> {
+async function indexedArtifactForPreview(input: { authorization: string; episodeId: string; relativePath: string; supabasePublishableKey: string | undefined; supabaseUrl: string | undefined }): Promise<{ assetRoot: string; sha256: string } | null> {
   if (!input.supabaseUrl || !input.supabasePublishableKey) return null;
   const supabase = createClient(input.supabaseUrl, input.supabasePublishableKey, { auth: { persistSession: false }, global: { headers: { Authorization: input.authorization } } });
 
-  const { data: artifact, error: artifactError } = await supabase.from("artifacts").select("episode_id").eq("episode_id", input.episodeId).eq("relative_path", input.relativePath).maybeSingle();
+  const { data: artifact, error: artifactError } = await supabase.from("artifacts").select("episode_id, sha256").eq("episode_id", input.episodeId).eq("relative_path", input.relativePath).maybeSingle();
   if (artifactError || !artifact) return null;
 
   const { data: episode, error: episodeError } = await supabase.from("episodes").select("blueprint_version_id").eq("id", artifact.episode_id).maybeSingle();
@@ -305,7 +319,7 @@ async function assetRootForIndexedArtifact(input: { authorization: string; episo
   const { data: blueprint, error: blueprintError } = await supabase.from("account_blueprint_versions").select("policy").eq("id", episode.blueprint_version_id).maybeSingle();
   if (blueprintError || !blueprint || !blueprint.policy || Array.isArray(blueprint.policy) || typeof blueprint.policy !== "object") return null;
   const assetRoot = blueprint.policy.asset_root;
-  return typeof assetRoot === "string" ? assetRoot.trim() || null : null;
+  return typeof assetRoot === "string" && assetRoot.trim() ? { assetRoot: assetRoot.trim(), sha256: artifact.sha256 } : null;
 }
 
 async function assetRootForOwnedEpisode(input: { authorization: string; episodeId: string; supabasePublishableKey: string | undefined; supabaseUrl: string | undefined }): Promise<string | null> {

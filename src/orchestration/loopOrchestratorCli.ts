@@ -4,6 +4,7 @@ import { chmod, mkdir, readFile, rename, stat, writeFile } from "node:fs/promise
 import { join } from "node:path";
 import { formatSnapshotFilename, snapshotTables, type SnapshotTable } from "./backupPolicy.js";
 import { collectNotifications, type AuditEvent, type NotificationCursor } from "./notificationPolicy.js";
+import { dispatchProvidedScriptWork } from "./providedScriptDispatch.js";
 
 const execFileAsync = promisify(execFile);
 const projectRoot = requiredEnvironment("LOOP_PROJECT_ROOT");
@@ -34,8 +35,28 @@ try {
 }
 
 async function dispatchTask(): Promise<void> {
-  const result = await runCommand("npm", ["run", "worker:run"], projectRoot);
-  process.stdout.write(JSON.stringify({ mode: "dispatch", worker: parseLastJsonLine(result.stdout) }) + "\n");
+  const result = await dispatchProvidedScriptWork({
+    planTasks: planProvidedScriptTasks,
+    runWorker: async () => {
+      const workerResult = await runCommand("npm", ["run", "worker:run"], projectRoot);
+      return parseLastJsonLine(workerResult.stdout);
+    },
+  });
+  process.stdout.write(JSON.stringify({ mode: "dispatch", ...result }) + "\n");
+}
+
+async function planProvidedScriptTasks(): Promise<Array<{ id: string }>> {
+  const { url, serviceRoleKey } = supabaseCredentials();
+  const endpoint = new URL("/rest/v1/rpc/orchestrate_provided_script_tasks", url);
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, "Content-Type": "application/json" },
+    body: "{}",
+  });
+  if (!response.ok) throw new Error(`创建已提供脚本任务失败：Supabase 返回 HTTP ${response.status}`);
+  const payload: unknown = await response.json();
+  if (!Array.isArray(payload) || payload.some((task) => !isRecord(task) || typeof task.id !== "string")) throw new Error("创建已提供脚本任务失败：Supabase 返回格式无效。");
+  return payload as Array<{ id: string }>;
 }
 
 async function notifyFor(kind: "approval" | "state"): Promise<void> {

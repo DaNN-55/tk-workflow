@@ -92,6 +92,7 @@ const materialInputProps = {
   isMaterialPending: false,
   isTitlePending: false,
   materialRevisions: [],
+  reviewPackages: [],
   onImportMaterial: vi.fn().mockResolvedValue(undefined),
   onUpdateTitle: vi.fn().mockResolvedValue(undefined),
 };
@@ -224,5 +225,53 @@ describe("审核台", () => {
     await user.type(screen.getByLabelText("工作标题"), "后补的标题");
     await user.click(screen.getByRole("button", { name: "保存标题" }));
     expect(onUpdateTitle).toHaveBeenCalledWith(reviewEpisode.id, "后补的标题");
+  });
+
+  it("读取分镜前文本产物及其冻结审核上下文", async () => {
+    const user = userEvent.setup();
+    const onTransition = vi.fn().mockResolvedValue(undefined);
+    const visualEpisode: Episode = { ...reviewEpisode, stage: "visual_review" };
+    const visualBrief: Artifact = {
+      ...previewArtifact,
+      artifact_type: "visual_brief",
+      id: "artifact-visual-brief",
+      producer_task_id: "task-visual-1",
+      relative_path: "episodes/episode-review/visual-brief-v1.md",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("# 视觉方案\n\n第一镜：雨夜古宅。", { status: 200, headers: { "Content-Type": "text/markdown" } })));
+
+    render(<EpisodeDetail {...materialInputProps} artifacts={[visualBrief]} blueprint={blueprint} episode={visualEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={onTransition} reviewPackages={[{
+      artifact_id: visualBrief.id,
+      context_snapshot: {
+        allowed_tools: ["read", "write"],
+        artifact: { relative_path: visualBrief.relative_path, sha256: visualBrief.sha256 },
+        budget: { limit_cents: 120 },
+        capability: "visual_planning",
+        executor: { model: "gpt-5.6-codex", provider: "codex" },
+        output: { content_type: "text/markdown", required_artifact_types: ["visual_brief"] },
+        script_revision: { sha256: "b".repeat(64) },
+      },
+      created_at: "2026-08-14T00:00:00.000Z",
+      episode_id: visualEpisode.id,
+      id: "review-package-1",
+      revision_number: 1,
+      stage: "visual_review",
+      task_id: "task-visual-1",
+      task_run_id: "task-run-1",
+    }]} tasks={[]} transitions={[]} />);
+
+    expect(await screen.findByText("第一镜：雨夜古宅。", { exact: false })).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith(`/_local-artifact?episode=episode-review&path=episodes%2Fepisode-review%2Fvisual-brief-v1.md&sha256=${"a".repeat(64)}`, { headers: { Authorization: "Bearer owner-token" } });
+    expect(screen.getByText("visual_planning")).toBeTruthy();
+    expect(screen.getByText("gpt-5.6-codex")).toBeTruthy();
+    expect(screen.getByText("120 分")).toBeTruthy();
+    expect(screen.getByText("read、write")).toBeTruthy();
+    expect(screen.getByText(`${"b".repeat(12)}…`)).toBeTruthy();
+
+    await user.type(screen.getByLabelText("审批理由"), "视觉方向清晰，符合主脚本。");
+    await user.click(screen.getByRole("button", { name: "批准" }));
+    expect(onTransition).toHaveBeenLastCalledWith(visualEpisode.id, "visual_approved", "视觉方向清晰，符合主脚本。");
+    await user.click(screen.getByRole("button", { name: "要求修改" }));
+    expect(onTransition).toHaveBeenLastCalledWith(visualEpisode.id, "visual_draft", "视觉方向清晰，符合主脚本。");
   });
 });

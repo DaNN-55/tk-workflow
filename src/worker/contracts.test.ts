@@ -19,8 +19,10 @@ const packageInput: WorkerTaskPackageInput = {
     blueprintVersionId: "blueprint-3",
     title: "一个可验证的选题",
   },
+  capability: "visual_planning",
+  allowedTools: ["read", "write"],
   allowedAssetRoot: "/Volumes/Media/tk-workflow/account-1",
-  output: { requiredArtifactTypes: ["brief"] },
+  output: { requiredArtifactTypes: ["brief"], contentType: "text/markdown", relativePath: "episodes/episode-1/brief.md", reviewStage: "visual_review" },
   inputArtifacts: [
     {
       artifactType: "research_notes",
@@ -36,11 +38,13 @@ describe("Worker 契约", () => {
     expect(createWorkerTaskPackage(packageInput)).toMatchObject({
       version: "worker-task/v1",
       provider: "codex",
+      capability: "visual_planning",
+      allowedTools: ["read", "write"],
       accountId: "account-1",
       episode: { id: "episode-1", blueprintVersionId: "blueprint-3" },
       budget: { limitCents: 0, maxAttempts: 2, attempt: 0 },
       assets: { allowedRoot: "/Volumes/Media/tk-workflow/account-1" },
-      output: { requiredArtifactTypes: ["brief"] },
+      output: { requiredArtifactTypes: ["brief"], contentType: "text/markdown", relativePath: "episodes/episode-1/brief.md", reviewStage: "visual_review" },
       forbiddenActions: ["approve", "publish", "change_blueprint", "change_episode_stage"],
     });
   });
@@ -156,5 +160,17 @@ describe("Worker 契约", () => {
       retry: { shouldRetry: false, reason: "Completed successfully." },
       nextStep: "Continue.",
     }, taskPackage)).toThrow("当前任务");
+
+    expect(() => validateWorkerResult({
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "completed",
+      artifacts: [{ artifactType: "brief", relativePath: "episodes/episode-1/brief-v2.md", sha256: "c".repeat(64), fileSize: 256 }],
+      validation: { passed: true, checks: [{ name: "schema", passed: true, detail: "valid" }] },
+      actualCostCents: 0,
+      blockers: [],
+      retry: { shouldRetry: false, reason: "Completed successfully." },
+      nextStep: "Continue.",
+    }, taskPackage)).toThrow("冻结输出路径");
   });
 });

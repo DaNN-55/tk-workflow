@@ -6,6 +6,7 @@ export const snapshotTables = {
   tasks: { order: "id.asc", boundaryColumn: "created_at" },
   task_runs: { order: "id.asc", boundaryColumn: "started_at" },
   artifacts: { order: "id.asc", boundaryColumn: "created_at" },
+  review_packages: { order: "id.asc", boundaryColumn: "created_at" },
   approvals: { order: "id.asc", boundaryColumn: "created_at" },
   state_transitions: { order: "id.asc", boundaryColumn: "created_at" },
   audit_events: { order: "id.asc", boundaryColumn: "created_at" },
