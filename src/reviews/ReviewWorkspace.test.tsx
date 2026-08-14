@@ -2,7 +2,7 @@ import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "../lib/database.types";
-import { EpisodeDetail, ReviewWorkspace } from "../App";
+import { EpisodeDetail, EpisodeDetailDrawer, ReviewWorkspace } from "../App";
 
 vi.mock("../lib/supabase", () => ({
   supabase: {
@@ -90,6 +90,13 @@ const blockedTask: Task = {
 
 describe("审核台", () => {
   beforeEach(() => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+      clear: () => storage.clear(),
+      getItem: (key: string) => storage.get(key) ?? null,
+      removeItem: (key: string) => storage.delete(key),
+      setItem: (key: string, value: string) => storage.set(key, value),
+    });
     vi.stubGlobal("fetch", vi.fn().mockImplementation(() => Promise.resolve(new Response(new Blob(["preview"], { type: "image/png" }), { status: 200 }))));
     vi.stubGlobal("URL", { createObjectURL: vi.fn().mockReturnValue("blob:local-preview"), revokeObjectURL: vi.fn() });
   });
@@ -113,6 +120,50 @@ describe("审核台", () => {
 
     await user.click(screen.getByRole("button", { name: /越南民间信仰中的符号/ }));
     expect(onSelectEpisode).toHaveBeenCalledWith(reviewEpisode.id);
+  });
+
+  it("以可关闭的检视抽屉展示生产单详情", async () => {
+    const user = userEvent.setup();
+    const onClose = vi.fn();
+
+    render(<EpisodeDetailDrawer isOpen onClose={onClose}><p>生产单详情内容</p></EpisodeDetailDrawer>);
+
+    expect(screen.getByRole("complementary", { name: "当前生产单详情" })).toBeTruthy();
+    expect(screen.getByText("生产单详情内容")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "关闭生产单详情" }));
+    expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  it("重新打开生产单时恢复未提交的审批理由，并允许明确清除草稿", async () => {
+    const user = userEvent.setup();
+    const onCreateLocalDirectory = vi.fn().mockResolvedValue(undefined);
+    const view = render(<EpisodeDetail artifacts={[]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={onCreateLocalDirectory} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    await user.type(screen.getByLabelText("审批理由"), "请补充第二段旁白的出处。");
+    expect(screen.getByText("本地草稿已保存")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "清除草稿" }));
+    await user.click(screen.getByRole("button", { name: "确认清除草稿" }));
+    expect((screen.getByLabelText("审批理由") as HTMLTextAreaElement).value).toBe("");
+
+    await user.type(screen.getByLabelText("审批理由"), "请补充第二段旁白的出处。");
+    view.unmount();
+
+    render(<EpisodeDetail artifacts={[]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={onCreateLocalDirectory} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    expect(screen.getByText("已恢复本地草稿")).toBeTruthy();
+    expect((screen.getByLabelText("审批理由") as HTMLTextAreaElement).value).toBe("请补充第二段旁白的出处。");
+    await user.click(screen.getByRole("button", { name: "清除草稿" }));
+    await user.click(screen.getByRole("button", { name: "确认清除草稿" }));
+    expect((screen.getByLabelText("审批理由") as HTMLTextAreaElement).value).toBe("");
+  });
+
+  it("仅在生产单详情中提供发布确认", () => {
+    const publishingEpisode: Episode = { ...reviewEpisode, stage: "publishing_review" };
+
+    render(<EpisodeDetail artifacts={[]} blueprint={blueprint} episode={publishingEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    expect(screen.getByRole("heading", { name: "发布确认" })).toBeTruthy();
+    expect(screen.getByLabelText("发布确认理由")).toBeTruthy();
   });
 
   it("显示可预览产物和 Worker 阻塞项，并以理由执行批准或要求修改", async () => {
@@ -187,5 +238,16 @@ describe("审核台", () => {
 
     await user.click(screen.getByRole("button", { name: "创建本地目录" }));
     expect(onCreateLocalDirectory).toHaveBeenCalledWith(reviewEpisode.id);
+  });
+
+  it("产物预览失败时提供中文说明和重试入口", async () => {
+    const user = userEvent.setup();
+    vi.mocked(fetch).mockRejectedValue(new Error("Failed to fetch"));
+
+    render(<EpisodeDetail artifacts={[previewArtifact]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    expect(await screen.findByText("本地产物暂时无法读取。请确认外置媒体库仍已挂载，再重试。")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "重新加载预览" }));
+    expect(fetch).toHaveBeenCalledTimes(2);
   });
 });
