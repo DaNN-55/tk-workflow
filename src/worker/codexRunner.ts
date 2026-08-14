@@ -56,6 +56,13 @@ export async function runCodexWorker(dependencies: CodexWorkerDependencies): Pro
   }
 
   try {
+    await dependencies.verifyArtifacts(taskPackage, taskPackage.assets.inputs);
+  } catch (error) {
+    await dependencies.reportResult(task.taskId, task.attempt, createBlockedResult(task.taskId, dependencies.actualCostCents, error, "input_artifacts_invalid"));
+    return { status: "blocked", taskId: task.taskId };
+  }
+
+  try {
     const output = await dependencies.execute(taskPackage);
     const candidate = parseCodexOutput(output, dependencies.actualCostCents);
     const result = validateWorkerResult(candidate, taskPackage);

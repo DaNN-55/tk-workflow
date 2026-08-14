@@ -1,4 +1,5 @@
 import type { Json } from "../lib/database.types";
+import { assetRootFromPolicy } from "../worker/assetRoot";
 
 export const defaultBlueprintPolicy = {
   positioning: "",
@@ -17,8 +18,7 @@ export function parseBlueprintPolicy(source: string): Json {
 }
 
 export function blueprintAssetRoot(policy: Json): string {
-  if (!policy || Array.isArray(policy) || typeof policy !== "object") return "";
-  return typeof policy.asset_root === "string" ? policy.asset_root : "";
+  return assetRootFromPolicy(policy);
 }
 
 export function withBlueprintAssetRoot(policy: Json, assetRoot: string): Json {

@@ -196,6 +196,83 @@ export type Database = {
           },
         ]
       }
+      blueprint_change_suggestions: {
+        Row: {
+          account_id: string
+          created_at: string
+          created_by: string
+          decision_reason: string | null
+          id: string
+          learning_report_id: string
+          proposed_blueprint_version_id: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_blueprint_version_id: string
+          status: "pending" | "approved" | "rejected"
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          created_by: string
+          decision_reason?: string | null
+          id?: string
+          learning_report_id: string
+          proposed_blueprint_version_id?: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_blueprint_version_id: string
+          status?: "pending" | "approved" | "rejected"
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          created_by?: string
+          decision_reason?: string | null
+          id?: string
+          learning_report_id?: string
+          proposed_blueprint_version_id?: string | null
+          proposed_policy?: Json
+          rationale?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_blueprint_version_id?: string
+          status?: "pending" | "approved" | "rejected"
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blueprint_change_suggestions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blueprint_change_suggestions_learning_report_id_fkey"
+            columns: ["learning_report_id"]
+            isOneToOne: false
+            referencedRelation: "learning_reports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blueprint_change_suggestions_proposed_blueprint_version_id_fkey"
+            columns: ["proposed_blueprint_version_id"]
+            isOneToOne: false
+            referencedRelation: "account_blueprint_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blueprint_change_suggestions_source_blueprint_version_id_fkey"
+            columns: ["source_blueprint_version_id"]
+            isOneToOne: false
+            referencedRelation: "account_blueprint_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       asset_locks: {
         Row: {
           episode_id: string
@@ -323,6 +400,7 @@ export type Database = {
           hypothesis: string
           id: string
           primary_metric: string
+          primary_variable: string
         }
         Insert: {
           created_at?: string
@@ -331,6 +409,7 @@ export type Database = {
           hypothesis: string
           id?: string
           primary_metric: string
+          primary_variable: string
         }
         Update: {
           created_at?: string
@@ -339,6 +418,7 @@ export type Database = {
           hypothesis?: string
           id?: string
           primary_metric?: string
+          primary_variable?: string
         }
         Relationships: [
           {
@@ -377,6 +457,41 @@ export type Database = {
             foreignKeyName: "metric_snapshots_episode_id_fkey"
             columns: ["episode_id"]
             isOneToOne: false
+            referencedRelation: "episodes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      learning_reports: {
+        Row: {
+          created_at: string
+          created_by: string
+          episode_id: string
+          id: string
+          recommendation: "keep" | "change" | "kill" | "insufficient_data"
+          summary: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          episode_id: string
+          id?: string
+          recommendation: "keep" | "change" | "kill" | "insufficient_data"
+          summary: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          episode_id?: string
+          id?: string
+          recommendation?: "keep" | "change" | "kill" | "insufficient_data"
+          summary?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "learning_reports_episode_id_fkey"
+            columns: ["episode_id"]
+            isOneToOne: true
             referencedRelation: "episodes"
             referencedColumns: ["id"]
           },
@@ -422,32 +537,56 @@ export type Database = {
       }
       tasks: {
         Row: {
-          budget_limit_cents: number | null
+          actual_cost_cents: number | null
+          attempt: number
+          budget_limit_cents: number
+          claimed_at: string | null
+          completed_at: string | null
           created_at: string
           episode_id: string
           id: string
           input_snapshot: Json
+          last_result: Json | null
           max_attempts: number
+          model: string
+          prompt_version: string
+          provider: string
           status: Database["public"]["Enums"]["task_status"]
           task_type: string
         }
         Insert: {
-          budget_limit_cents?: number | null
+          actual_cost_cents?: number | null
+          attempt?: number
+          budget_limit_cents?: number
+          claimed_at?: string | null
+          completed_at?: string | null
           created_at?: string
           episode_id: string
           id?: string
           input_snapshot?: Json
+          last_result?: Json | null
           max_attempts?: number
+          model?: string
+          prompt_version?: string
+          provider?: string
           status?: Database["public"]["Enums"]["task_status"]
           task_type: string
         }
         Update: {
-          budget_limit_cents?: number | null
+          actual_cost_cents?: number | null
+          attempt?: number
+          budget_limit_cents?: number
+          claimed_at?: string | null
+          completed_at?: string | null
           created_at?: string
           episode_id?: string
           id?: string
           input_snapshot?: Json
+          last_result?: Json | null
           max_attempts?: number
+          model?: string
+          prompt_version?: string
+          provider?: string
           status?: Database["public"]["Enums"]["task_status"]
           task_type?: string
         }
@@ -566,6 +705,44 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      create_blueprint_change_suggestion: {
+        Args: { p_learning_report_id: string; p_proposed_policy: Json; p_rationale: string }
+        Returns: {
+          account_id: string
+          created_at: string
+          created_by: string
+          decision_reason: string | null
+          id: string
+          learning_report_id: string
+          proposed_blueprint_version_id: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_blueprint_version_id: string
+          status: "pending" | "approved" | "rejected"
+        }
+        SetofOptions: { from: "*"; to: "blueprint_change_suggestions"; isOneToOne: true; isSetofReturn: false }
+      }
+      define_experiment: {
+        Args: {
+          p_episode_id: string
+          p_guardrail_metrics: string[]
+          p_hypothesis: string
+          p_primary_metric: string
+          p_primary_variable: string
+        }
+        Returns: {
+          created_at: string
+          episode_id: string
+          guardrail_metrics: string[]
+          hypothesis: string
+          id: string
+          primary_metric: string
+          primary_variable: string
+        }
+        SetofOptions: { from: "*"; to: "experiments"; isOneToOne: true; isSetofReturn: false }
+      }
       has_required_artifacts: {
         Args: {
           p_episode_id: string
@@ -583,6 +760,86 @@ export type Database = {
           to_stage: Database["public"]["Enums"]["episode_stage"]
         }
         Returns: boolean
+      }
+      record_publish_package: {
+        Args: {
+          p_episode_id: string
+          p_file_size: number
+          p_relative_path: string
+          p_sha256: string
+        }
+        Returns: {
+          artifact_type: string
+          created_at: string
+          episode_id: string
+          file_size: number
+          id: string
+          producer_task_id: string | null
+          relative_path: string
+          sha256: string
+        }
+        SetofOptions: {
+          from: "*"
+          to: "artifacts"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      record_learning_report: {
+        Args: { p_episode_id: string; p_recommendation: "keep" | "change" | "kill" | "insufficient_data"; p_summary: string }
+        Returns: {
+          created_at: string
+          created_by: string
+          episode_id: string
+          id: string
+          recommendation: "keep" | "change" | "kill" | "insufficient_data"
+          summary: string
+        }
+        SetofOptions: { from: "*"; to: "learning_reports"; isOneToOne: true; isSetofReturn: false }
+      }
+      record_weekly_metric_snapshot: {
+        Args: { p_captured_at: string; p_episode_id: string; p_metrics: Json }
+        Returns: {
+          captured_at: string
+          captured_by: string
+          episode_id: string
+          id: string
+          metrics: Json
+        }
+        SetofOptions: { from: "*"; to: "metric_snapshots"; isOneToOne: true; isSetofReturn: false }
+      }
+      review_blueprint_change_suggestion: {
+        Args: { p_decision: "approved" | "rejected"; p_decision_reason: string; p_suggestion_id: string }
+        Returns: {
+          account_id: string
+          created_at: string
+          created_by: string
+          decision_reason: string | null
+          id: string
+          learning_report_id: string
+          proposed_blueprint_version_id: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_blueprint_version_id: string
+          status: "pending" | "approved" | "rejected"
+        }
+        SetofOptions: { from: "*"; to: "blueprint_change_suggestions"; isOneToOne: true; isSetofReturn: false }
+      }
+      record_publish_package_verification: {
+        Args: { p_episode_id: string; p_file_size: number; p_sha256: string }
+        Returns: {
+          budget_limit_cents: number | null
+          created_at: string
+          episode_id: string
+          id: string
+          input_snapshot: Json
+          max_attempts: number
+          status: Database["public"]["Enums"]["task_status"]
+          task_type: string
+        }
+        SetofOptions: { from: "*"; to: "tasks"; isOneToOne: true; isSetofReturn: false }
       }
       transition_episode: {
         Args: {
@@ -629,7 +886,7 @@ export type Database = {
         | "metrics_collecting"
         | "learning_recorded"
       member_role: "owner" | "worker"
-      task_status: "ready" | "completed" | "blocked"
+      task_status: "ready" | "running" | "completed" | "blocked" | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -779,7 +1036,7 @@ export const Constants = {
         "learning_recorded",
       ],
       member_role: ["owner", "worker"],
-      task_status: ["ready", "completed", "blocked"],
+      task_status: ["ready", "running", "completed", "blocked", "failed"],
     },
   },
 } as const

@@ -1,10 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { Database, Json } from "./lib/database.types";
 import { supabase } from "./lib/supabase";
 import { blueprintAssetRoot, defaultBlueprintPolicy, parseBlueprintPolicy, withBlueprintAssetRoot } from "./platform/blueprintPolicy";
 import type { EpisodeStage } from "./platform/types";
+import { createPublicationConfirmation } from "./publishing/publicationConfirmation";
+import { LearningWorkspace } from "./learning/LearningWorkspace";
+import type { ApproveBlueprintChangeSuggestionInput, SaveBlueprintChangeSuggestionInput, SaveExperimentInput, SaveLearningReportInput, SaveMetricSnapshotInput } from "./learning/LearningWorkspace";
 
 type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
@@ -12,14 +15,34 @@ type Account = Database["public"]["Tables"]["accounts"]["Row"];
 type Blueprint = Database["public"]["Tables"]["account_blueprint_versions"]["Row"];
 type Episode = Database["public"]["Tables"]["episodes"]["Row"];
 type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
+type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
+type Experiment = Database["public"]["Tables"]["experiments"]["Row"];
+type LearningReport = Database["public"]["Tables"]["learning_reports"]["Row"];
+type MetricSnapshot = Database["public"]["Tables"]["metric_snapshots"]["Row"];
+type BlueprintChangeSuggestion = Database["public"]["Tables"]["blueprint_change_suggestions"]["Row"];
+
+interface ReviewAction {
+  approveStage: EpisodeStage;
+  requestChangesStage: EpisodeStage;
+}
+
+interface WorkerBlocker {
+  code: string;
+  detail: string;
+}
 
 interface Workspace {
   accounts: Account[];
   blueprints: Blueprint[];
   episodes: Episode[];
   artifacts: Artifact[];
+  tasks: Task[];
   transitions: Transition[];
+  experiments: Experiment[];
+  learningReports: LearningReport[];
+  metricSnapshots: MetricSnapshot[];
+  blueprintChangeSuggestions: BlueprintChangeSuggestion[];
 }
 
 const navigation: Array<{ id: NavigationItem; label: string }> = [
@@ -52,6 +75,13 @@ const stageLabels: Record<EpisodeStage, string> = {
   learning_recorded: "已记录复盘",
 };
 
+const reviewActions: Partial<Record<EpisodeStage, ReviewAction>> = {
+  script_review: { approveStage: "script_approved", requestChangesStage: "script_draft" },
+  visual_review: { approveStage: "visual_approved", requestChangesStage: "visual_draft" },
+  storyboard_review: { approveStage: "storyboard_approved", requestChangesStage: "storyboard_draft" },
+  qc_review: { approveStage: "qc_passed", requestChangesStage: "render_ready" },
+};
+
 function stageTone(stage: EpisodeStage): "review" | "approved" | "muted" {
   if (stage.endsWith("approved") || stage === "qc_passed" || stage === "publish_ready" || stage === "published") {
     return "approved";
@@ -79,15 +109,55 @@ function policyAssetRoot(policy: Json) {
   return blueprintAssetRoot(policy) || "尚未配置";
 }
 
+function reviewActionFor(stage: EpisodeStage): ReviewAction | null {
+  return reviewActions[stage] ?? null;
+}
+
+function workerBlockers(tasks: Task[], episodeId: string): WorkerBlocker[] {
+  return tasks
+    .filter((task) => task.episode_id === episodeId && task.status === "blocked")
+    .flatMap((task) => blockersFromResult(task.last_result));
+}
+
+function blockersFromResult(result: Json | null): WorkerBlocker[] {
+  if (!result || Array.isArray(result) || typeof result !== "object" || !("blockers" in result) || !Array.isArray(result.blockers)) return [];
+  return result.blockers.flatMap((blocker) => {
+    if (!blocker || Array.isArray(blocker) || typeof blocker !== "object") return [];
+    const { code, detail } = blocker;
+    return typeof code === "string" && code && typeof detail === "string" && detail ? [{ code, detail }] : [];
+  });
+}
+
+function isSafeRelativePath(relativePath: string): boolean {
+  return relativePath.length > 0 && !relativePath.split(/[\\/]/).some((segment) => !segment || segment === "." || segment === "..");
+}
+
+function localArtifactUrl(episodeId: string, relativePath: string): string | null {
+  if (!episodeId || !isSafeRelativePath(relativePath)) return null;
+  return `/_local-artifact?${new URLSearchParams({ episode: episodeId, path: relativePath }).toString()}`;
+}
+
+function artifactPreviewKind(relativePath: string): "image" | "video" | null {
+  const path = relativePath.toLowerCase();
+  if (/\.(avif|gif|jpe?g|png|webp)$/.test(path)) return "image";
+  if (/\.(mp4|mov|webm)$/.test(path)) return "video";
+  return null;
+}
+
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, transitionsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
     supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
+    supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
+    supabase.from("experiments").select("*").order("created_at", { ascending: false }),
+    supabase.from("learning_reports").select("*").order("created_at", { ascending: false }),
+    supabase.from("metric_snapshots").select("*").order("captured_at", { ascending: false }),
+    supabase.from("blueprint_change_suggestions").select("*").order("created_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, transitionsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -98,7 +168,12 @@ async function loadWorkspace(): Promise<Workspace> {
     blueprints: blueprintsResult.data ?? [],
     episodes: episodesResult.data ?? [],
     artifacts: artifactsResult.data ?? [],
+    tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
+    experiments: experimentsResult.data ?? [],
+    learningReports: learningReportsResult.data ?? [],
+    metricSnapshots: metricSnapshotsResult.data ?? [],
+    blueprintChangeSuggestions: blueprintChangeSuggestionsResult.data ?? [],
   };
 }
 
@@ -273,6 +348,152 @@ export function App() {
     }
   }
 
+  async function transitionEpisode(episodeId: string, toStage: EpisodeStage, reason: string) {
+    setPendingAction(`transition-${episodeId}-${toStage}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("transition_episode", {
+        p_episode_id: episodeId,
+        p_to_stage: toStage,
+        p_reason: reason,
+      });
+      if (error) throw error;
+      setMessage(toStage === "published" ? "已记录 Owner 的人工发布确认。" : toStage === "publish_ready" ? "发布包已进入人工发布确认。" : "已记录 Owner 的审核决定。" );
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法写入发布状态。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function createLocalEpisodeDirectory(episodeId: string) {
+    setPendingAction(`directory-${episodeId}`);
+    setErrorMessage("");
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (!data.session) throw new Error("需要 Owner 登录会话。");
+      const response = await fetch(`/_local-episode-directory?${new URLSearchParams({ episode: episodeId }).toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${data.session.access_token}` },
+      });
+      if (!response.ok) throw new Error((await response.text()).trim() || "无法创建本地 Episode 目录。");
+      setMessage("本地 Episode 目录已准备就绪。");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法创建本地 Episode 目录。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function saveExperiment(input: SaveExperimentInput) {
+    setPendingAction(`experiment-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("define_experiment", {
+        p_episode_id: input.episodeId,
+        p_guardrail_metrics: input.guardrailMetrics,
+        p_hypothesis: input.hypothesis,
+        p_primary_metric: input.primaryMetric,
+        p_primary_variable: input.primaryVariable,
+      });
+      if (error) throw error;
+      setMessage("实验定义已记录，可以按周录入指标。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法保存实验定义。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function saveMetricSnapshot(input: SaveMetricSnapshotInput) {
+    setPendingAction(`metrics-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("record_weekly_metric_snapshot", {
+        p_captured_at: input.capturedAt,
+        p_episode_id: input.episodeId,
+        p_metrics: input.metrics,
+      });
+      if (error) throw error;
+      setMessage("本周指标已记录。再次保存同一周会更新该周数据。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法保存本周指标。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function saveLearningReport(input: SaveLearningReportInput) {
+    setPendingAction(`learning-report-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("record_learning_report", {
+        p_episode_id: input.episodeId,
+        p_recommendation: input.recommendation,
+        p_summary: input.summary,
+      });
+      if (error) throw error;
+      setMessage("复盘报告已记录，生产单的周指标已锁定。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法记录复盘报告。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function saveBlueprintChangeSuggestion(input: SaveBlueprintChangeSuggestionInput) {
+    setPendingAction(`blueprint-suggestion-${input.learningReportId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("create_blueprint_change_suggestion", {
+        p_learning_report_id: input.learningReportId,
+        p_proposed_policy: input.proposedPolicy,
+        p_rationale: input.rationale,
+      });
+      if (error) throw error;
+      setMessage("蓝图变更建议已保存，等待 Owner 批准。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法提交蓝图变更建议。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function approveBlueprintChangeSuggestion(input: ApproveBlueprintChangeSuggestionInput) {
+    setPendingAction(`blueprint-suggestion-approval-${input.suggestionId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("review_blueprint_change_suggestion", {
+        p_decision: "approved",
+        p_decision_reason: input.decisionReason,
+        p_suggestion_id: input.suggestionId,
+      });
+      if (error) throw error;
+      setMessage("蓝图变更建议已批准并激活新版本；它只影响之后新建的生产单。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法批准蓝图变更建议。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   if (isLoading && session === undefined) return <LoadingScreen />;
   if (!session) return <AuthScreen errorMessage={errorMessage} onSignedIn={() => setMessage("登录成功，正在读取控制数据。") } />;
   if (isLoading && !workspace) return <LoadingScreen />;
@@ -322,6 +543,39 @@ export function App() {
             onCreateBlueprint={createBlueprint}
             onSelectAccount={setSelectedAccountId}
           />
+        ) : activeNavigation === "reviews" ? (
+          <ReviewWorkspace
+            accountsById={accountsById}
+            episodes={workspace.episodes}
+            onSelectEpisode={setSelectedEpisodeId}
+            selectedEpisode={selectedEpisode}
+          />
+        ) : activeNavigation === "publish" ? (
+          <PublishWorkspace
+            accountsById={accountsById}
+            artifacts={workspace.artifacts}
+            tasks={workspace.tasks}
+            episodes={visibleEpisodes}
+            isPending={pendingAction}
+            onSelectEpisode={setSelectedEpisodeId}
+            onTransition={transitionEpisode}
+            selectedEpisode={selectedEpisode}
+          />
+        ) : activeNavigation === "learning" ? (
+          <LearningWorkspace
+            accountsById={accountsById}
+            blueprintVersionsById={blueprintsById}
+            episodes={visibleEpisodes}
+            experiments={workspace.experiments}
+            learningReports={workspace.learningReports}
+            metricSnapshots={workspace.metricSnapshots}
+            blueprintChangeSuggestions={workspace.blueprintChangeSuggestions}
+            onSaveExperiment={saveExperiment}
+            onSaveLearningReport={saveLearningReport}
+            onSaveMetricSnapshot={saveMetricSnapshot}
+            onSaveBlueprintChangeSuggestion={saveBlueprintChangeSuggestion}
+            onApproveBlueprintChangeSuggestion={approveBlueprintChangeSuggestion}
+          />
         ) : (
           <EpisodeWorkspace
             accounts={workspace.accounts}
@@ -340,7 +594,17 @@ export function App() {
 
       <aside className="review-pane" aria-label="当前生产单详情">
         {selectedEpisode ? (
-          <EpisodeDetail artifacts={workspace.artifacts} blueprint={blueprintsById.get(selectedEpisode.blueprint_version_id) ?? null} episode={selectedEpisode} transitions={workspace.transitions} />
+          <EpisodeDetail
+            artifacts={workspace.artifacts}
+            blueprint={blueprintsById.get(selectedEpisode.blueprint_version_id) ?? null}
+            episode={selectedEpisode}
+            isDirectoryPending={pendingAction === `directory-${selectedEpisode.id}`}
+            isTransitionPending={pendingAction.startsWith(`transition-${selectedEpisode.id}-`)}
+            onCreateLocalDirectory={createLocalEpisodeDirectory}
+            onTransition={transitionEpisode}
+            tasks={workspace.tasks}
+            transitions={workspace.transitions}
+          />
         ) : <EmptyDetail />}
       </aside>
 
@@ -461,14 +725,171 @@ function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate
 }
 
 function EpisodeWorkspace({ accounts, accountsById, artifacts, blueprintsById, currentNavigation, episodes, filter, onFilter, onSelectEpisode, selectedEpisode }: { accounts: Account[]; accountsById: Map<string, Account>; artifacts: Artifact[]; blueprintsById: Map<string, Blueprint>; currentNavigation: NavigationItem; episodes: Episode[]; filter: string; onFilter: (value: string) => void; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
-  if (currentNavigation !== "episodes") return <div className="empty-state"><h2>{currentNavigation === "reviews" ? "审核队列" : currentNavigation === "publish" ? "发布队列" : "复盘记录"}</h2><p>该模块将在后续 Worker 与发布包任务中接入。当前所有状态与审计均来自真实数据库。</p></div>;
+  if (currentNavigation !== "episodes") return <div className="empty-state"><h2>复盘记录</h2><p>该模块将在后续学习闭环任务中接入。当前所有状态与审计均来自真实数据库。</p></div>;
   return <><div className="filters"><label><span>账号</span><select onChange={(event) => onFilter(event.target.value)} value={filter}><option value="全部账号">全部账号</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><span className="summary-count">{episodes.length} 个生产单</span></div><div className="episode-table" role="table" aria-label="生产单"><div className="table-row table-header" role="row"><span>生产单</span><span>账号</span><span>蓝图</span><span>当前阶段</span><span>产物数</span><span>更新时间</span></div>{episodes.map((episode) => <button className={`table-row episode-row ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id} onClick={() => onSelectEpisode(episode.id)} role="row" type="button"><span className="episode-name"><strong>{episode.title}</strong><small>{episode.id.slice(0, 8)}</small></span><span className="account-name"><i>{accountsById.get(episode.account_id)?.slug.slice(0, 2).toUpperCase()}</i>{accountsById.get(episode.account_id)?.name}</span><span>v{blueprintsById.get(episode.blueprint_version_id)?.version ?? "—"}</span><span className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</span><span>{artifacts.filter((artifact) => artifact.episode_id === episode.id).length}</span><span>{formatDate(episode.updated_at)}</span></button>)}</div>{episodes.length === 0 ? <div className="empty-state compact"><h2>还没有生产单</h2><p>请点击右上角“新建生产单”。每个生产单都会固定使用当前激活蓝图。</p></div> : null}<div className="status-legend"><span><i className="legend-approved" />已通过</span><span><i className="legend-review" />待审核</span><span><i className="legend-muted" />草稿 / 制作</span></div></>;
 }
 
-function EpisodeDetail({ artifacts, blueprint, episode, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; transitions: Transition[] }) {
+export function ReviewWorkspace({ accountsById, episodes, onSelectEpisode, selectedEpisode }: { accountsById: Map<string, Account>; episodes: Episode[]; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
+  const reviewEpisodes = episodes.filter((episode) => reviewActionFor(episode.stage));
+  return <><p className="muted-copy">审核决定会通过受控状态迁移写入审批与审计记录；Worker 的阻塞项会显示在右侧 Episode 详情中。</p><section className="review-queue" aria-label="待审核 Episode"><h2>待审核 Episode</h2>{reviewEpisodes.length ? <div className="review-queue-list">{reviewEpisodes.map((episode) => <button className={`review-queue-item ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id} onClick={() => onSelectEpisode(episode.id)} type="button"><strong>{episode.title}</strong><span>{accountsById.get(episode.account_id)?.name ?? "未知账号"} · {stageLabels[episode.stage]}</span></button>)}</div> : <div className="empty-state compact"><h2>没有待审核 Episode</h2><p>Worker 将产物推进到审核阶段后，会在这里显示。</p></div>}</section></>;
+}
+
+export function PublishWorkspace({ accountsById, artifacts, episodes, isPending, onSelectEpisode, onTransition, selectedEpisode, tasks }: { accountsById: Map<string, Account>; artifacts: Artifact[]; episodes: Episode[]; isPending: string; onSelectEpisode: (id: string) => void; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; selectedEpisode: Episode | null; tasks: Task[] }) {
+  const queue = episodes.filter((episode) => episode.stage === "qc_passed" || episode.stage === "publish_ready" || episode.stage === "publishing_review");
+  return <><p className="muted-copy">发布包由本机 `publish:prepare` 生成并固定索引；人工发布前请运行 `publish:verify` 复核文件。控制台不会连接或点击任何发布平台。</p><div className="publish-queue">{queue.map((episode) => <article className={`publish-card ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id}><button className="publish-card-summary" onClick={() => onSelectEpisode(episode.id)} type="button"><strong>{episode.title}</strong><span>{accountsById.get(episode.account_id)?.name ?? "未知账号"} · {stageLabels[episode.stage]}</span><small>{artifacts.some((artifact) => artifact.episode_id === episode.id && artifact.artifact_type === "publish_package") ? "发布包已固定" : "缺少发布包索引"}</small></button>{episode.stage === "qc_passed" ? <button className="button button-secondary" disabled={!artifacts.some((artifact) => artifact.episode_id === episode.id && artifact.artifact_type === "publish_package") || !tasks.some((task) => task.episode_id === episode.id && task.task_type === "verify_publish_package" && task.status === "completed") || isPending === `transition-${episode.id}-publish_ready`} onClick={() => void onTransition(episode.id, "publish_ready", "已复核固定发布包，进入待发布。")} type="button">进入待发布</button> : episode.stage === "publish_ready" ? <button className="button button-secondary" disabled={isPending === `transition-${episode.id}-publishing_review`} onClick={() => void onTransition(episode.id, "publishing_review", "发布包已固定，等待 Owner 的人工发布确认。")} type="button">进入发布确认</button> : <PublicationConfirmationForm episode={episode} isPending={isPending === `transition-${episode.id}-published`} onConfirm={onTransition} />}</article>)}</div>{queue.length === 0 ? <div className="empty-state compact"><h2>没有待确认发布</h2><p>完成 QC 后，先在外置媒体库运行发布包生成；发布包被索引后才能进入待发布。</p></div> : null}</>;
+}
+
+function PublicationConfirmationForm({ episode, isPending, onConfirm }: { episode: Episode; isPending: boolean; onConfirm: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void> }) {
+  const [acknowledged, setAcknowledged] = useState(false);
+  const [reason, setReason] = useState("");
+  const [formError, setFormError] = useState("");
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setFormError("");
+      const confirmation = createPublicationConfirmation({ acknowledged, reason });
+      void onConfirm(episode.id, "published", confirmation.reason);
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "发布确认无效。");
+    }
+  }
+
+  return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => setReason(event.target.value)} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
+}
+
+export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isTransitionPending, onCreateLocalDirectory, onTransition, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isTransitionPending: boolean; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; tasks: Task[]; transitions: Transition[] }) {
   const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
   const history = transitions.filter((transition) => transition.episode_id === episode.id);
-  return <><header className="review-heading"><div><h2>{episode.title}</h2><span>{episode.id.slice(0, 8)}</span></div></header><p className="review-meta">蓝图 v{blueprint?.version ?? "—"} · 创建于 {formatDate(episode.created_at)}</p><div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div><div className="no-media-preview"><Icon name="Play" /><strong>暂无媒体预览</strong><span>媒体文件仍保留在外置硬盘，平台仅保存索引与哈希。</span></div><section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无产物。首个 brief 任务已创建，等待 Worker 接入。</p>}</section><section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section></>;
+  const blockers = workerBlockers(tasks, episode.id);
+  const reviewAction = reviewActionFor(episode.stage);
+  const [directoryMessage, setDirectoryMessage] = useState("");
+
+  async function copyEpisodeId() {
+    try {
+      await navigator.clipboard.writeText(episode.id);
+      setDirectoryMessage("完整 Episode ID 已复制。");
+    } catch {
+      setDirectoryMessage("浏览器无法复制，请从上方输入框手动复制。");
+    }
+  }
+
+  return <><header className="review-heading"><div><h2>{episode.title}</h2><span>{episode.id.slice(0, 8)}</span></div></header><p className="review-meta">蓝图 v{blueprint?.version ?? "—"} · 创建于 {formatDate(episode.created_at)}</p><section className="review-section episode-local-directory"><h3>本地 Episode 目录</h3><label>完整 Episode ID<input aria-label="完整 Episode ID" readOnly value={episode.id} /></label><div className="review-actions"><button className="button button-secondary" onClick={() => void copyEpisodeId()} type="button">复制 Episode ID</button><button className="button button-secondary" disabled={isDirectoryPending} onClick={() => void onCreateLocalDirectory(episode.id)} type="button">{isDirectoryPending ? "创建中…" : "创建本地目录"}</button></div>{directoryMessage ? <p className="muted-copy">{directoryMessage}</p> : null}</section><div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div><ArtifactPreview artifacts={episodeArtifacts} /><section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无产物。首个 brief 任务已创建，等待 Worker 接入。</p>}</section>{blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}{reviewAction ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} reviewAction={reviewAction} /> : null}<section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section></>;
+}
+
+function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {
+  const previewableArtifacts = artifacts.filter((candidate) => artifactPreviewKind(candidate.relative_path));
+  const [selectedArtifactId, setSelectedArtifactId] = useState(previewableArtifacts[0]?.id ?? "");
+  const artifact = previewableArtifacts.find((candidate) => candidate.id === selectedArtifactId) ?? previewableArtifacts[0];
+  const kind = artifact && artifactPreviewKind(artifact.relative_path);
+  const source = artifact ? localArtifactUrl(artifact.episode_id, artifact.relative_path) : null;
+  if (!artifact || !kind || !source) return <div className="no-media-preview"><Icon name="Play" /><strong>暂无可预览产物</strong><span>图片和视频产物可在本机审核台预览；其他产物仍保留相对路径、哈希和元数据。</span></div>;
+  return <div className="artifact-preview">{previewableArtifacts.length > 1 ? <label>预览产物<select aria-label="预览产物" onChange={(event) => setSelectedArtifactId(event.target.value)} value={artifact.id}>{previewableArtifacts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.artifact_type} · {candidate.relative_path}</option>)}</select></label> : null}<LocalArtifactMedia artifact={artifact} kind={kind} source={source} /></div>;
+}
+
+function ArtifactPreviewMedia({ kind, label, source }: { kind: "image" | "video"; label: string; source: string }) {
+  return kind === "image" ? <img alt={label} src={source} /> : <video aria-label={label} controls preload="metadata" src={source} />;
+}
+
+function LocalArtifactMedia({ artifact, kind, source }: { artifact: Artifact; kind: "image" | "video"; source: string }) {
+  const [previewUrl, setPreviewUrl] = useState("");
+  const [error, setError] = useState("");
+  const [isExpanded, setIsExpanded] = useState(false);
+  const lightboxRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    let objectUrl = "";
+    let isCurrent = true;
+
+    async function loadPreview() {
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !data.session) throw new Error("需要 Owner 登录会话。");
+      const response = await fetch(source, { headers: { Authorization: `Bearer ${data.session.access_token}` } });
+      if (!response.ok) throw new Error("无法读取本地产物预览。");
+      objectUrl = URL.createObjectURL(await response.blob());
+      if (!isCurrent) {
+        URL.revokeObjectURL(objectUrl);
+        objectUrl = "";
+        return;
+      }
+      setPreviewUrl(objectUrl);
+    }
+
+    setPreviewUrl("");
+    setError("");
+    void loadPreview().catch((cause: unknown) => {
+      if (isCurrent) setError(cause instanceof Error ? cause.message : "无法读取本地产物预览。");
+    });
+    return () => {
+      isCurrent = false;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
+  }, [source]);
+
+  useEffect(() => {
+    setIsExpanded(false);
+  }, [artifact.id]);
+
+  useEffect(() => {
+    if (!isExpanded) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusableElements = () => Array.from(lightboxRef.current?.querySelectorAll<HTMLElement>("button, video") ?? []);
+    const firstFocusableElement = focusableElements()[0];
+    firstFocusableElement?.focus();
+
+    function manageLightboxFocus(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsExpanded(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusableElements();
+      if (!elements.length) return;
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (!lightboxRef.current?.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", manageLightboxFocus);
+    return () => {
+      window.removeEventListener("keydown", manageLightboxFocus);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [isExpanded]);
+
+  if (error) return <div className="no-media-preview"><Icon name="Play" /><strong>无法预览产物</strong><span>{error}</span></div>;
+  if (!previewUrl) return <div className="no-media-preview"><Icon name="Play" /><strong>正在加载产物预览</strong><span>本机审核台正在验证 Owner 权限与产物索引。</span></div>;
+  const previewLabel = `${artifact.artifact_type} 产物预览`;
+  const expandedLabel = `${artifact.artifact_type} 产物放大预览`;
+  return <><figure className="local-artifact-preview"><ArtifactPreviewMedia kind={kind} label={previewLabel} source={previewUrl} /><button aria-label={`放大查看 ${artifact.artifact_type} 产物`} className="artifact-expand-button" onClick={() => setIsExpanded(true)} type="button">放大查看</button><figcaption>{artifact.artifact_type} · {artifact.relative_path}</figcaption></figure>{isExpanded ? <div aria-label={expandedLabel} aria-modal="true" className="artifact-lightbox" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsExpanded(false); }} ref={lightboxRef} role="dialog"><div className="artifact-lightbox-content"><button aria-label="关闭放大预览" className="artifact-lightbox-close" onClick={() => setIsExpanded(false)} type="button">关闭</button><ArtifactPreviewMedia kind={kind} label={expandedLabel} source={previewUrl} /></div></div> : null}</>;
+}
+
+function ReviewActions({ episode, isPending, onTransition, reviewAction }: { episode: Episode; isPending: boolean; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; reviewAction: ReviewAction }) {
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    setReason("");
+    setError("");
+  }, [episode.id]);
+
+  function transition(toStage: EpisodeStage) {
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      setError("请填写审批理由。");
+      return;
+    }
+    setError("");
+    void onTransition(episode.id, toStage, trimmedReason);
+  }
+
+  return <section className="review-section review-decision"><h3>Owner 审批</h3><label>审批理由<textarea aria-label="审批理由" onChange={(event) => setReason(event.target.value)} placeholder="说明批准或要求修改的原因" rows={3} value={reason} /></label>{error ? <p className="form-error">{error}</p> : null}<div className="review-actions"><button className="button button-primary" disabled={isPending} onClick={() => transition(reviewAction.approveStage)} type="button">批准</button><button className="button button-secondary" disabled={isPending} onClick={() => transition(reviewAction.requestChangesStage)} type="button">要求修改</button></div></section>;
 }
 
 function EmptyDetail() { return <div className="empty-detail"><h2>选择一个生产单</h2><p>右侧会显示真实产物索引、固定蓝图版本与审计记录。</p></div>; }
