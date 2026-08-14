@@ -28,6 +28,14 @@ export interface WorkerTaskPackageInput {
     title: string;
   };
   capability: string;
+  commission?: {
+    creativeDirection: string;
+    coreContent: string;
+  };
+  reviewFeedback?: {
+    reviewPackageId: string;
+    reason: string;
+  };
   allowedTools: string[];
   allowedAssetRoot: string;
   output: {
@@ -45,6 +53,14 @@ export interface WorkerTaskPackage {
   model: string;
   promptVersion: string;
   capability: string;
+  commission?: {
+    creativeDirection: string;
+    coreContent: string;
+  };
+  reviewFeedback?: {
+    reviewPackageId: string;
+    reason: string;
+  };
   allowedTools: readonly string[];
   task: Pick<WorkerTaskPackageInput["task"], "id" | "type">;
   accountId: string;
@@ -95,6 +111,8 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
   if (!input.task.model.trim() || !input.task.promptVersion.trim()) throw new Error("model and promptVersion are required.");
   if (!isNonEmptyString(input.task.type)) throw new Error("task type is required.");
   if (!isNonEmptyString(input.capability)) throw new Error("capability is required.");
+  if (input.commission && (!isNonEmptyString(input.commission.creativeDirection) || !isNonEmptyString(input.commission.coreContent))) throw new Error("commission must contain creative direction and core content.");
+  if (input.reviewFeedback && (!isNonEmptyString(input.reviewFeedback.reviewPackageId) || !isNonEmptyString(input.reviewFeedback.reason))) throw new Error("review feedback must contain its package and reason.");
   if (input.allowedTools.some((tool) => !isNonEmptyString(tool))) throw new Error("allowedTools must contain non-empty names.");
   if (input.output.requiredArtifactTypes.length === 0 || input.output.requiredArtifactTypes.some((artifactType) => !isNonEmptyString(artifactType))) throw new Error("至少需要一个输出产物类型。");
   if (!isNonEmptyString(input.output.contentType) || !isNonEmptyString(input.output.reviewStage) || !isSafeRelativePath(input.output.relativePath)) throw new Error("输出契约缺少有效的内容类型、路径或审核阶段。");
@@ -107,6 +125,8 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     model: input.task.model,
     promptVersion: input.task.promptVersion,
     capability: input.capability,
+    ...(input.commission ? { commission: { creativeDirection: input.commission.creativeDirection, coreContent: input.commission.coreContent } } : {}),
+    ...(input.reviewFeedback ? { reviewFeedback: { reviewPackageId: input.reviewFeedback.reviewPackageId, reason: input.reviewFeedback.reason } } : {}),
     allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
     accountId: input.episode.accountId,

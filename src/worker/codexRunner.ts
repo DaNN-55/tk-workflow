@@ -97,11 +97,33 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
       title: task.title,
     },
     capability: requiredString(snapshot.capability, "任务缺少能力声明。"),
+    commission: commission(snapshot),
+    reviewFeedback: reviewFeedback(snapshot),
     allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
     output,
     inputArtifacts: inputArtifacts(snapshot),
   });
+}
+
+function commission(snapshot: Record<string, unknown>): WorkerTaskPackageInput["commission"] {
+  const value = snapshot.commission;
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("任务脚本委托格式无效。");
+  return {
+    creativeDirection: requiredString(value.creative_direction, "任务脚本委托缺少创作方向。"),
+    coreContent: requiredString(value.core_content, "任务脚本委托缺少核心内容。"),
+  };
+}
+
+function reviewFeedback(snapshot: Record<string, unknown>): WorkerTaskPackageInput["reviewFeedback"] {
+  const value = snapshot.review_feedback;
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("任务审核反馈格式无效。");
+  return {
+    reviewPackageId: requiredString(value.review_package_id, "任务审核反馈缺少审核包。"),
+    reason: requiredString(value.reason, "任务审核反馈缺少修改理由。"),
+  };
 }
 
 function parseCodexOutput(output: string, actualCostCents: number): unknown {

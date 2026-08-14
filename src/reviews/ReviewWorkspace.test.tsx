@@ -90,10 +90,12 @@ const blockedTask: Task = {
 
 const materialInputProps = {
   isMaterialPending: false,
+  isScriptCommissionPending: false,
   isTitlePending: false,
   materialRevisions: [],
   reviewPackages: [],
   onImportMaterial: vi.fn().mockResolvedValue(undefined),
+  onCommissionScript: vi.fn().mockResolvedValue(undefined),
   onUpdateTitle: vi.fn().mockResolvedValue(undefined),
 };
 
@@ -232,6 +234,67 @@ describe("审核台", () => {
     await user.type(screen.getByLabelText("工作标题"), "后补的标题");
     await user.click(screen.getByRole("button", { name: "保存标题" }));
     expect(onUpdateTitle).toHaveBeenCalledWith(reviewEpisode.id, "后补的标题");
+  });
+
+  it("允许无主脚本的生产单提交冻结的脚本委托", async () => {
+    const user = userEvent.setup();
+    const onCommissionScript = vi.fn().mockResolvedValue(undefined);
+    const waitingEpisode: Episode = { ...reviewEpisode, id: "episode-waiting", stage: "waiting_input", title: "等待脚本委托" };
+
+    render(<EpisodeDetail {...materialInputProps} artifacts={[]} blueprint={blueprint} episode={waitingEpisode} isDirectoryPending={false} isTransitionPending={false} onCommissionScript={onCommissionScript} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    await user.type(screen.getByLabelText("创作方向"), "雨夜民俗悬疑，节奏克制。 ");
+    await user.type(screen.getByLabelText("必须表达的核心内容"), "仪式感与人物抉择。 ");
+    await user.click(screen.getByRole("button", { name: "提交脚本委托" }));
+
+    expect(onCommissionScript).toHaveBeenCalledWith({
+      coreContent: "仪式感与人物抉择。",
+      creativeDirection: "雨夜民俗悬疑，节奏克制。",
+      episodeId: waitingEpisode.id,
+    });
+  });
+
+  it("展示委托脚本的冻结输入，并让 Owner 完成审核或要求重写", async () => {
+    const user = userEvent.setup();
+    const onTransition = vi.fn().mockResolvedValue(undefined);
+    const scriptArtifact: Artifact = {
+      ...previewArtifact,
+      artifact_type: "script",
+      id: "artifact-script",
+      producer_task_id: "task-script-1",
+      relative_path: "episodes/episode-review/generated-script-v1.md",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("# 雨夜祭坛\n\n主角在仪式中作出选择。", { status: 200, headers: { "Content-Type": "text/markdown" } })));
+
+    render(<EpisodeDetail {...materialInputProps} artifacts={[scriptArtifact]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={onTransition} reviewPackages={[{
+      artifact_id: scriptArtifact.id,
+      context_snapshot: {
+        allowed_tools: ["read", "write"],
+        artifact: { relative_path: scriptArtifact.relative_path, sha256: scriptArtifact.sha256 },
+        budget: { limit_cents: 90 },
+        capability: "script_writing",
+        commission: { creative_direction: "雨夜民俗悬疑", core_content: "仪式感与人物抉择" },
+        executor: { model: "gpt-5.6-codex", provider: "codex" },
+        output: { content_type: "text/markdown", required_artifact_types: ["script"] },
+      },
+      created_at: "2026-08-14T00:00:00.000Z",
+      episode_id: reviewEpisode.id,
+      id: "review-package-script-1",
+      revision_number: 1,
+      stage: "script_review",
+      task_id: "task-script-1",
+      task_run_id: "task-run-script-1",
+    }]} tasks={[]} transitions={[]} />);
+
+    expect(await screen.findByText("主角在仪式中作出选择。", { exact: false })).toBeTruthy();
+    expect(screen.getByText("雨夜民俗悬疑")).toBeTruthy();
+    expect(screen.getByText("仪式感与人物抉择")).toBeTruthy();
+
+    await user.type(screen.getByLabelText("审批理由"), "脚本可进入分镜前准备。");
+    await user.click(screen.getByRole("button", { name: "批准" }));
+    expect(onTransition).toHaveBeenLastCalledWith(reviewEpisode.id, "script_approved", "脚本可进入分镜前准备。");
+    await user.click(screen.getByRole("button", { name: "要求修改" }));
+    expect(onTransition).toHaveBeenLastCalledWith(reviewEpisode.id, "script_draft", "脚本可进入分镜前准备。");
   });
 
   it("读取分镜前文本产物及其冻结审核上下文", async () => {

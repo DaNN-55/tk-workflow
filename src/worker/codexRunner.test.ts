@@ -52,6 +52,46 @@ describe("本地 Codex Worker runner", () => {
     expect(execute).toHaveBeenCalledWith(expect.objectContaining({ accountId: "account-1", episode: expect.objectContaining({ blueprintVersionId: "blueprint-1" }) }));
   });
 
+  it("把已冻结的脚本委托内容原样交给 Worker", async () => {
+    const execute = vi.fn().mockResolvedValue(JSON.stringify({
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "completed",
+      artifacts: [{ artifactType: "script", relativePath: "episodes/episode-1/generated-script-v1.md", sha256: "a".repeat(64), fileSize: 128 }],
+      validation: { passed: true, checks: [{ name: "schema", passed: true, detail: "script is complete" }] },
+      actualCostCents: 0,
+      blockers: [],
+      retry: { shouldRetry: false, reason: "Completed successfully." },
+      nextStep: "Submit the script for Owner review.",
+    }));
+    const reportResult = vi.fn().mockResolvedValue(undefined);
+
+    await runCodexWorker({
+      claimNextTask: async () => ({
+        ...claimedTask,
+        taskType: "draft_script",
+        inputSnapshot: {
+          capability: "script_writing",
+          commission: { creative_direction: "雨夜民俗悬疑", core_content: "仪式感与人物抉择" },
+          review_feedback: { review_package_id: "review-1", reason: "补充人物动机", actor_id: "owner-1" },
+          allowed_tools: ["read", "write"],
+          output: { required_artifact_types: ["script"], content_type: "text/markdown", relative_path: "episodes/episode-1/generated-script-v1.md", review_stage: "script_review" },
+          input_artifacts: [],
+        },
+      }),
+      reportResult,
+      execute,
+      verifyAssetRoot: async () => undefined,
+      verifyArtifacts: async () => undefined,
+      actualCostCents: 0,
+    });
+
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      commission: { creativeDirection: "雨夜民俗悬疑", coreContent: "仪式感与人物抉择" },
+      reviewFeedback: { reviewPackageId: "review-1", reason: "补充人物动机" },
+    }));
+  });
+
   it("缺少资产根目录时写入 blocked，不调用 Codex", async () => {
     const execute = vi.fn();
     const reportResult = vi.fn().mockResolvedValue(undefined);

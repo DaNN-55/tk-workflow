@@ -47,6 +47,12 @@ interface MaterialImportRequest {
   isMainScript: boolean;
 }
 
+interface ScriptCommissionRequest {
+  episodeId: string;
+  creativeDirection: string;
+  coreContent: string;
+}
+
 interface Workspace {
   accounts: Account[];
   blueprints: Blueprint[];
@@ -514,6 +520,26 @@ export function App() {
     }
   }
 
+  async function commissionScript(input: ScriptCommissionRequest) {
+    setPendingAction(`commission-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("commission_script", {
+        p_core_content: input.coreContent,
+        p_creative_direction: input.creativeDirection,
+        p_episode_id: input.episodeId,
+      });
+      if (error) throw error;
+      setMessage("脚本委托已冻结，正在等待 Worker 生成脚本。");
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法提交脚本委托。");
+      throw error;
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   async function transitionEpisode(episodeId: string, toStage: EpisodeStage, reason: string): Promise<boolean> {
     setPendingAction(`transition-${episodeId}-${toStage}`);
     setErrorMessage("");
@@ -761,9 +787,11 @@ export function App() {
             episode={selectedEpisode}
             isDirectoryPending={pendingAction === `directory-${selectedEpisode.id}`}
             isMaterialPending={pendingAction === `material-${selectedEpisode.id}`}
+            isScriptCommissionPending={pendingAction === `commission-${selectedEpisode.id}`}
             isTitlePending={pendingAction === `title-${selectedEpisode.id}`}
             isTransitionPending={pendingAction.startsWith(`transition-${selectedEpisode.id}-`)}
             onCreateLocalDirectory={createLocalEpisodeDirectory}
+            onCommissionScript={commissionScript}
             onImportMaterial={importProductionMaterial}
             onTransition={transitionEpisode}
             onUpdateTitle={updateEpisodeTitle}
@@ -972,7 +1000,7 @@ export function PublicationConfirmationForm({ episode, isPending, onConfirm, own
   return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => updateDraft({ acknowledged: event.target.checked, reason })} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => updateDraft({ acknowledged, reason: event.target.value })} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label>{draft ? <OperationDraftNotice isRestored={isRestoredDraft} onClear={clearDraft} /> : null}<button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
-export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onImportMaterial, onTransition, onUpdateTitle, ownerId = "local-owner", reviewPackages, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
+export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isScriptCommissionPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onCommissionScript, onImportMaterial, onTransition, onUpdateTitle, ownerId = "local-owner", reviewPackages, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isScriptCommissionPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onCommissionScript: (input: ScriptCommissionRequest) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
   const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
   const episodeMaterials = materialRevisions.filter((revision) => revision.episode_id === episode.id);
   const history = transitions.filter((transition) => transition.episode_id === episode.id);
@@ -996,6 +1024,7 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     <p className="review-meta">蓝图 v{blueprint?.version ?? "—"} · 创建于 {formatDate(episode.created_at)}</p>
     <EpisodeTitleForm episode={episode} isPending={isTitlePending} onSave={onUpdateTitle} />
     <section className="review-section episode-local-directory"><h3>项目输入目录</h3><label>完整 Episode ID<input aria-label="完整 Episode ID" readOnly value={episode.id} /></label><p className="muted-copy">目录文件放入 <code>episodes/{episode.id}/input</code>，再在下方显式确认导入。</p><div className="review-actions"><button className="button button-secondary" onClick={() => void copyEpisodeId()} type="button">复制 Episode ID</button><button className="button button-secondary" disabled={isDirectoryPending} onClick={() => void onCreateLocalDirectory(episode.id)} type="button">{isDirectoryPending ? "创建中…" : "创建本地目录"}</button></div>{directoryMessage ? <p className="muted-copy">{directoryMessage}</p> : null}</section>
+    {episode.stage === "waiting_input" && !episode.main_script_revision_id ? <ScriptCommissionForm episodeId={episode.id} isPending={isScriptCommissionPending} onCommission={onCommissionScript} /> : null}
     <MaterialImportForm episodeId={episode.id} isPending={isMaterialPending} onImport={onImportMaterial} />
     <section className="review-section"><h3>生产材料修订</h3>{episodeMaterials.length ? episodeMaterials.map((revision) => <div className="material-revision" key={revision.id}><strong>{revision.is_main_script ? "主脚本" : revision.material_type} · v{revision.revision_number}</strong><span>{revision.source_kind} · {revision.source_path}</span><code>{revision.sha256.slice(0, 12)}… · {revision.storage_path}</code></div>) : <p className="muted-copy">还没有导入材料修订。</p>}</section>
     <div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div>
@@ -1007,6 +1036,27 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     {episode.stage === "publishing_review" ? <section className="review-section publication-decision"><h3>发布确认</h3><PublicationConfirmationForm episode={episode} isPending={isTransitionPending} onConfirm={onTransition} ownerId={ownerId} /></section> : null}
     <section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section>
   </>;
+}
+
+function ScriptCommissionForm({ episodeId, isPending, onCommission }: { episodeId: string; isPending: boolean; onCommission: (input: ScriptCommissionRequest) => Promise<void> }) {
+  const [creativeDirection, setCreativeDirection] = useState("");
+  const [coreContent, setCoreContent] = useState("");
+  const [formError, setFormError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      const direction = creativeDirection.trim();
+      const content = coreContent.trim();
+      if (!direction || !content) throw new Error("请填写创作方向和必须表达的核心内容。");
+      setFormError("");
+      await onCommission({ episodeId, creativeDirection: direction, coreContent: content });
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "无法提交脚本委托。");
+    }
+  }
+
+  return <form className="review-section script-commission" onSubmit={submit}><h3>委托生成脚本</h3><p className="muted-copy">提交后将冻结以下输入，脚本须经 Owner 审核通过才会进入分镜前准备。</p><label>创作方向<textarea aria-label="创作方向" onChange={(event) => setCreativeDirection(event.target.value)} rows={4} value={creativeDirection} /></label><label>必须表达的核心内容<textarea aria-label="必须表达的核心内容" onChange={(event) => setCoreContent(event.target.value)} rows={4} value={coreContent} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "提交中…" : "提交脚本委托"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
 function EpisodeTitleForm({ episode, isPending, onSave }: { episode: Episode; isPending: boolean; onSave: (episodeId: string, title: string) => Promise<void> }) {
@@ -1069,8 +1119,12 @@ interface FrozenReviewContext {
   model: string;
   provider: string;
   requiredArtifactTypes: string[];
-  scriptSha256: string;
+  input: FrozenReviewInput;
 }
+
+type FrozenReviewInput =
+  | { kind: "provided_script"; scriptSha256: string }
+  | { kind: "commission"; creativeDirection: string; coreContent: string };
 
 function parseFrozenReviewContext(snapshot: Json): FrozenReviewContext | null {
   if (!snapshot || Array.isArray(snapshot) || typeof snapshot !== "object") return null;
@@ -1079,9 +1133,16 @@ function parseFrozenReviewContext(snapshot: Json): FrozenReviewContext | null {
   const budget = snapshot.budget;
   const output = snapshot.output;
   const scriptRevision = snapshot.script_revision;
-  if (!executor || Array.isArray(executor) || typeof executor !== "object" || !artifact || Array.isArray(artifact) || typeof artifact !== "object" || !budget || Array.isArray(budget) || typeof budget !== "object" || !output || Array.isArray(output) || typeof output !== "object" || !scriptRevision || Array.isArray(scriptRevision) || typeof scriptRevision !== "object") return null;
+  const commission = snapshot.commission;
+  if (!executor || Array.isArray(executor) || typeof executor !== "object" || !artifact || Array.isArray(artifact) || typeof artifact !== "object" || !budget || Array.isArray(budget) || typeof budget !== "object" || !output || Array.isArray(output) || typeof output !== "object") return null;
   const budgetLimitCents = budget.limit_cents;
-  if (typeof snapshot.capability !== "string" || typeof artifact.relative_path !== "string" || typeof artifact.sha256 !== "string" || typeof executor.provider !== "string" || typeof executor.model !== "string" || typeof budgetLimitCents !== "number" || !Number.isInteger(budgetLimitCents) || budgetLimitCents < 0 || !Array.isArray(snapshot.allowed_tools) || snapshot.allowed_tools.some((tool) => typeof tool !== "string") || typeof output.content_type !== "string" || !Array.isArray(output.required_artifact_types) || output.required_artifact_types.some((artifactType) => typeof artifactType !== "string") || typeof scriptRevision.sha256 !== "string") return null;
+  if (typeof snapshot.capability !== "string" || typeof artifact.relative_path !== "string" || typeof artifact.sha256 !== "string" || typeof executor.provider !== "string" || typeof executor.model !== "string" || typeof budgetLimitCents !== "number" || !Number.isInteger(budgetLimitCents) || budgetLimitCents < 0 || !Array.isArray(snapshot.allowed_tools) || snapshot.allowed_tools.some((tool) => typeof tool !== "string") || typeof output.content_type !== "string" || !Array.isArray(output.required_artifact_types) || output.required_artifact_types.some((artifactType) => typeof artifactType !== "string")) return null;
+  const input: FrozenReviewInput | null = scriptRevision && !Array.isArray(scriptRevision) && typeof scriptRevision === "object" && typeof scriptRevision.sha256 === "string"
+    ? { kind: "provided_script" as const, scriptSha256: scriptRevision.sha256 }
+    : commission && !Array.isArray(commission) && typeof commission === "object" && typeof commission.creative_direction === "string" && typeof commission.core_content === "string"
+      ? { kind: "commission" as const, creativeDirection: commission.creative_direction, coreContent: commission.core_content }
+      : null;
+  if (!input) return null;
   return {
     allowedTools: snapshot.allowed_tools as string[],
     artifactRelativePath: artifact.relative_path,
@@ -1092,7 +1153,7 @@ function parseFrozenReviewContext(snapshot: Json): FrozenReviewContext | null {
     model: executor.model,
     provider: executor.provider,
     requiredArtifactTypes: output.required_artifact_types as string[],
-    scriptSha256: scriptRevision.sha256,
+    input,
   };
 }
 
@@ -1122,7 +1183,7 @@ function TextReviewPackage({ artifact, reviewPackage }: { artifact: Artifact; re
     return () => { isCurrent = false; };
   }, [source]);
 
-  return <section className="review-section text-review-package"><h3>可审核文本 · 修订 v{reviewPackage.revision_number}</h3>{error ? <p className="form-error">{error}</p> : content ? <pre>{content}</pre> : <p className="muted-copy">正在读取文本产物…</p>}<h4>冻结审核上下文</h4>{context ? <dl><div><dt>主脚本 SHA-256</dt><dd>{context.scriptSha256.slice(0, 12)}…</dd></div><div><dt>能力</dt><dd>{context.capability}</dd></div><div><dt>执行器</dt><dd>{context.provider} · <span>{context.model}</span></dd></div><div><dt>预算</dt><dd>{context.budgetLimitCents} 分</dd></div><div><dt>允许工具</dt><dd>{context.allowedTools.join("、") || "无"}</dd></div><div><dt>输出契约</dt><dd>{context.contentType} · {context.requiredArtifactTypes.join("、")}</dd></div></dl> : <p className="form-error">冻结审核上下文格式无效。</p>}</section>;
+  return <section className="review-section text-review-package"><h3>可审核文本 · 修订 v{reviewPackage.revision_number}</h3>{error ? <p className="form-error">{error}</p> : content ? <pre>{content}</pre> : <p className="muted-copy">正在读取文本产物…</p>}<h4>冻结审核上下文</h4>{context ? <dl>{context.input.kind === "provided_script" ? <div><dt>主脚本 SHA-256</dt><dd>{context.input.scriptSha256.slice(0, 12)}…</dd></div> : <><div><dt>创作方向</dt><dd>{context.input.creativeDirection}</dd></div><div><dt>核心内容</dt><dd>{context.input.coreContent}</dd></div></>}<div><dt>能力</dt><dd>{context.capability}</dd></div><div><dt>执行器</dt><dd>{context.provider} · <span>{context.model}</span></dd></div><div><dt>预算</dt><dd>{context.budgetLimitCents} 分</dd></div><div><dt>允许工具</dt><dd>{context.allowedTools.join("、") || "无"}</dd></div><div><dt>输出契约</dt><dd>{context.contentType} · {context.requiredArtifactTypes.join("、")}</dd></div></dl> : <p className="form-error">冻结审核上下文格式无效。</p>}</section>;
 }
 
 function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {

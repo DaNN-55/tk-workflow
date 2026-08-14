@@ -913,6 +913,11 @@ export type Database = {
         Returns: Database["public"]["Tables"]["production_material_revisions"]["Row"]
         SetofOptions: { from: "*"; to: "production_material_revisions"; isOneToOne: true; isSetofReturn: false }
       }
+      commission_script: {
+        Args: { p_core_content: string; p_creative_direction: string; p_episode_id: string }
+        Returns: Database["public"]["Tables"]["tasks"]["Row"]
+        SetofOptions: { from: "*"; to: "tasks"; isOneToOne: true; isSetofReturn: false }
+      }
       orchestrate_provided_script_tasks: {
         Args: Record<PropertyKey, never>
         Returns: Database["public"]["Tables"]["tasks"]["Row"][]
