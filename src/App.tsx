@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import type { Database, Json } from "./lib/database.types";
@@ -647,9 +647,15 @@ function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {
   return <div className="artifact-preview">{previewableArtifacts.length > 1 ? <label>预览产物<select aria-label="预览产物" onChange={(event) => setSelectedArtifactId(event.target.value)} value={artifact.id}>{previewableArtifacts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.artifact_type} · {candidate.relative_path}</option>)}</select></label> : null}<LocalArtifactMedia artifact={artifact} kind={kind} source={source} /></div>;
 }
 
+function ArtifactPreviewMedia({ kind, label, source }: { kind: "image" | "video"; label: string; source: string }) {
+  return kind === "image" ? <img alt={label} src={source} /> : <video aria-label={label} controls preload="metadata" src={source} />;
+}
+
 function LocalArtifactMedia({ artifact, kind, source }: { artifact: Artifact; kind: "image" | "video"; source: string }) {
   const [previewUrl, setPreviewUrl] = useState("");
   const [error, setError] = useState("");
+  const [isExpanded, setIsExpanded] = useState(false);
+  const lightboxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let objectUrl = "";
@@ -680,9 +686,48 @@ function LocalArtifactMedia({ artifact, kind, source }: { artifact: Artifact; ki
     };
   }, [source]);
 
+  useEffect(() => {
+    setIsExpanded(false);
+  }, [artifact.id]);
+
+  useEffect(() => {
+    if (!isExpanded) return;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const focusableElements = () => Array.from(lightboxRef.current?.querySelectorAll<HTMLElement>("button, video") ?? []);
+    const firstFocusableElement = focusableElements()[0];
+    firstFocusableElement?.focus();
+
+    function manageLightboxFocus(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setIsExpanded(false);
+        return;
+      }
+      if (event.key !== "Tab") return;
+      const elements = focusableElements();
+      if (!elements.length) return;
+      const first = elements[0];
+      const last = elements[elements.length - 1];
+      if (!lightboxRef.current?.contains(document.activeElement) || (event.shiftKey && document.activeElement === first)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+    window.addEventListener("keydown", manageLightboxFocus);
+    return () => {
+      window.removeEventListener("keydown", manageLightboxFocus);
+      if (previousFocus?.isConnected) previousFocus.focus();
+    };
+  }, [isExpanded]);
+
   if (error) return <div className="no-media-preview"><Icon name="Play" /><strong>无法预览产物</strong><span>{error}</span></div>;
   if (!previewUrl) return <div className="no-media-preview"><Icon name="Play" /><strong>正在加载产物预览</strong><span>本机审核台正在验证 Owner 权限与产物索引。</span></div>;
-  return <figure className="local-artifact-preview">{kind === "image" ? <img alt={`${artifact.artifact_type} 产物预览`} src={previewUrl} /> : <video aria-label={`${artifact.artifact_type} 产物预览`} controls preload="metadata" src={previewUrl} />}<figcaption>{artifact.artifact_type} · {artifact.relative_path}</figcaption></figure>;
+  const previewLabel = `${artifact.artifact_type} 产物预览`;
+  const expandedLabel = `${artifact.artifact_type} 产物放大预览`;
+  return <><figure className="local-artifact-preview"><ArtifactPreviewMedia kind={kind} label={previewLabel} source={previewUrl} /><button aria-label={`放大查看 ${artifact.artifact_type} 产物`} className="artifact-expand-button" onClick={() => setIsExpanded(true)} type="button">放大查看</button><figcaption>{artifact.artifact_type} · {artifact.relative_path}</figcaption></figure>{isExpanded ? <div aria-label={expandedLabel} aria-modal="true" className="artifact-lightbox" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsExpanded(false); }} ref={lightboxRef} role="dialog"><div className="artifact-lightbox-content"><button aria-label="关闭放大预览" className="artifact-lightbox-close" onClick={() => setIsExpanded(false)} type="button">关闭</button><ArtifactPreviewMedia kind={kind} label={expandedLabel} source={previewUrl} /></div></div> : null}</>;
 }
 
 function ReviewActions({ episode, isPending, onTransition, reviewAction }: { episode: Episode; isPending: boolean; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; reviewAction: ReviewAction }) {

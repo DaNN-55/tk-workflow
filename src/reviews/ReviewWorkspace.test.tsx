@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Database } from "../lib/database.types";
@@ -95,6 +95,7 @@ describe("审核台", () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
     else delete (navigator as { clipboard?: Clipboard }).clipboard;
@@ -145,6 +146,31 @@ describe("审核台", () => {
     await user.click(screen.getByRole("button", { name: "批准" }));
     expect(screen.getByText("请填写审批理由。")).toBeTruthy();
     expect(onTransition).toHaveBeenCalledTimes(2);
+  });
+
+  it("以纵向缩略图展示产物，并允许 Owner 放大后关闭预览", async () => {
+    const user = userEvent.setup();
+
+    render(<EpisodeDetail artifacts={[previewArtifact]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    const preview = await screen.findByAltText("cover 产物预览");
+    expect(preview.closest("figure")?.className).toContain("local-artifact-preview");
+
+    await user.click(screen.getByRole("button", { name: "放大查看 cover 产物" }));
+    expect(screen.getByRole("dialog", { name: "cover 产物放大预览" })).toBeTruthy();
+    expect(screen.getByRole("img", { name: "cover 产物放大预览" }).getAttribute("src")).toBe("blob:local-preview");
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "关闭放大预览" }));
+
+    await user.keyboard("{Tab}");
+    expect(screen.getByRole("dialog", { name: "cover 产物放大预览" }).contains(document.activeElement)).toBe(true);
+
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: "cover 产物放大预览" })).toBeNull();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "放大查看 cover 产物" }));
+
+    await user.click(screen.getByRole("button", { name: "放大查看 cover 产物" }));
+    await user.click(screen.getByRole("dialog", { name: "cover 产物放大预览" }));
+    expect(screen.queryByRole("dialog", { name: "cover 产物放大预览" })).toBeNull();
   });
 
   it("显示完整 Episode ID，并允许 Owner 复制 ID 和创建固定本地目录", async () => {
