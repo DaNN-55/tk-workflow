@@ -5,3 +5,4 @@ dist/
 n8n/runtime/
 n8n/worker.env.local
 *.tsbuildinfo
+docs/运行手册.md
