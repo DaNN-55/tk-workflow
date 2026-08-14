@@ -7,7 +7,7 @@ import { blueprintAssetRoot, defaultBlueprintPolicy, parseBlueprintPolicy, withB
 import type { EpisodeStage } from "./platform/types";
 import { createPublicationConfirmation } from "./publishing/publicationConfirmation";
 import { LearningWorkspace } from "./learning/LearningWorkspace";
-import type { SaveExperimentInput, SaveMetricSnapshotInput } from "./learning/LearningWorkspace";
+import type { ApproveBlueprintChangeSuggestionInput, SaveBlueprintChangeSuggestionInput, SaveExperimentInput, SaveLearningReportInput, SaveMetricSnapshotInput } from "./learning/LearningWorkspace";
 
 type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
@@ -18,7 +18,9 @@ type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
 type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
 type Experiment = Database["public"]["Tables"]["experiments"]["Row"];
+type LearningReport = Database["public"]["Tables"]["learning_reports"]["Row"];
 type MetricSnapshot = Database["public"]["Tables"]["metric_snapshots"]["Row"];
+type BlueprintChangeSuggestion = Database["public"]["Tables"]["blueprint_change_suggestions"]["Row"];
 
 interface ReviewAction {
   approveStage: EpisodeStage;
@@ -38,7 +40,9 @@ interface Workspace {
   tasks: Task[];
   transitions: Transition[];
   experiments: Experiment[];
+  learningReports: LearningReport[];
   metricSnapshots: MetricSnapshot[];
+  blueprintChangeSuggestions: BlueprintChangeSuggestion[];
 }
 
 const navigation: Array<{ id: NavigationItem; label: string }> = [
@@ -141,7 +145,7 @@ function artifactPreviewKind(relativePath: string): "image" | "video" | null {
 }
 
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, metricSnapshotsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
@@ -149,9 +153,11 @@ async function loadWorkspace(): Promise<Workspace> {
     supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
     supabase.from("experiments").select("*").order("created_at", { ascending: false }),
+    supabase.from("learning_reports").select("*").order("created_at", { ascending: false }),
     supabase.from("metric_snapshots").select("*").order("captured_at", { ascending: false }),
+    supabase.from("blueprint_change_suggestions").select("*").order("created_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, metricSnapshotsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -165,7 +171,9 @@ async function loadWorkspace(): Promise<Workspace> {
     tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
     experiments: experimentsResult.data ?? [],
+    learningReports: learningReportsResult.data ?? [],
     metricSnapshots: metricSnapshotsResult.data ?? [],
+    blueprintChangeSuggestions: blueprintChangeSuggestionsResult.data ?? [],
   };
 }
 
@@ -423,6 +431,69 @@ export function App() {
     }
   }
 
+  async function saveLearningReport(input: SaveLearningReportInput) {
+    setPendingAction(`learning-report-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("record_learning_report", {
+        p_episode_id: input.episodeId,
+        p_recommendation: input.recommendation,
+        p_summary: input.summary,
+      });
+      if (error) throw error;
+      setMessage("复盘报告已记录，生产单的周指标已锁定。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法记录复盘报告。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function saveBlueprintChangeSuggestion(input: SaveBlueprintChangeSuggestionInput) {
+    setPendingAction(`blueprint-suggestion-${input.learningReportId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("create_blueprint_change_suggestion", {
+        p_learning_report_id: input.learningReportId,
+        p_proposed_policy: input.proposedPolicy,
+        p_rationale: input.rationale,
+      });
+      if (error) throw error;
+      setMessage("蓝图变更建议已保存，等待 Owner 批准。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法提交蓝图变更建议。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function approveBlueprintChangeSuggestion(input: ApproveBlueprintChangeSuggestionInput) {
+    setPendingAction(`blueprint-suggestion-approval-${input.suggestionId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("review_blueprint_change_suggestion", {
+        p_decision: "approved",
+        p_decision_reason: input.decisionReason,
+        p_suggestion_id: input.suggestionId,
+      });
+      if (error) throw error;
+      setMessage("蓝图变更建议已批准并激活新版本；它只影响之后新建的生产单。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法批准蓝图变更建议。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   if (isLoading && session === undefined) return <LoadingScreen />;
   if (!session) return <AuthScreen errorMessage={errorMessage} onSignedIn={() => setMessage("登录成功，正在读取控制数据。") } />;
   if (isLoading && !workspace) return <LoadingScreen />;
@@ -493,11 +564,17 @@ export function App() {
         ) : activeNavigation === "learning" ? (
           <LearningWorkspace
             accountsById={accountsById}
+            blueprintVersionsById={blueprintsById}
             episodes={visibleEpisodes}
             experiments={workspace.experiments}
+            learningReports={workspace.learningReports}
             metricSnapshots={workspace.metricSnapshots}
+            blueprintChangeSuggestions={workspace.blueprintChangeSuggestions}
             onSaveExperiment={saveExperiment}
+            onSaveLearningReport={saveLearningReport}
             onSaveMetricSnapshot={saveMetricSnapshot}
+            onSaveBlueprintChangeSuggestion={saveBlueprintChangeSuggestion}
+            onApproveBlueprintChangeSuggestion={approveBlueprintChangeSuggestion}
           />
         ) : (
           <EpisodeWorkspace

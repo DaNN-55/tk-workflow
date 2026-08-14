@@ -196,6 +196,83 @@ export type Database = {
           },
         ]
       }
+      blueprint_change_suggestions: {
+        Row: {
+          account_id: string
+          created_at: string
+          created_by: string
+          decision_reason: string | null
+          id: string
+          learning_report_id: string
+          proposed_blueprint_version_id: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_blueprint_version_id: string
+          status: "pending" | "approved" | "rejected"
+        }
+        Insert: {
+          account_id: string
+          created_at?: string
+          created_by: string
+          decision_reason?: string | null
+          id?: string
+          learning_report_id: string
+          proposed_blueprint_version_id?: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_blueprint_version_id: string
+          status?: "pending" | "approved" | "rejected"
+        }
+        Update: {
+          account_id?: string
+          created_at?: string
+          created_by?: string
+          decision_reason?: string | null
+          id?: string
+          learning_report_id?: string
+          proposed_blueprint_version_id?: string | null
+          proposed_policy?: Json
+          rationale?: string
+          reviewed_at?: string | null
+          reviewed_by?: string | null
+          source_blueprint_version_id?: string
+          status?: "pending" | "approved" | "rejected"
+        }
+        Relationships: [
+          {
+            foreignKeyName: "blueprint_change_suggestions_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blueprint_change_suggestions_learning_report_id_fkey"
+            columns: ["learning_report_id"]
+            isOneToOne: false
+            referencedRelation: "learning_reports"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blueprint_change_suggestions_proposed_blueprint_version_id_fkey"
+            columns: ["proposed_blueprint_version_id"]
+            isOneToOne: false
+            referencedRelation: "account_blueprint_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "blueprint_change_suggestions_source_blueprint_version_id_fkey"
+            columns: ["source_blueprint_version_id"]
+            isOneToOne: false
+            referencedRelation: "account_blueprint_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       asset_locks: {
         Row: {
           episode_id: string
@@ -380,6 +457,41 @@ export type Database = {
             foreignKeyName: "metric_snapshots_episode_id_fkey"
             columns: ["episode_id"]
             isOneToOne: false
+            referencedRelation: "episodes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      learning_reports: {
+        Row: {
+          created_at: string
+          created_by: string
+          episode_id: string
+          id: string
+          recommendation: "keep" | "change" | "kill" | "insufficient_data"
+          summary: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          episode_id: string
+          id?: string
+          recommendation: "keep" | "change" | "kill" | "insufficient_data"
+          summary: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          episode_id?: string
+          id?: string
+          recommendation?: "keep" | "change" | "kill" | "insufficient_data"
+          summary?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "learning_reports_episode_id_fkey"
+            columns: ["episode_id"]
+            isOneToOne: true
             referencedRelation: "episodes"
             referencedColumns: ["id"]
           },
@@ -593,6 +705,25 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      create_blueprint_change_suggestion: {
+        Args: { p_learning_report_id: string; p_proposed_policy: Json; p_rationale: string }
+        Returns: {
+          account_id: string
+          created_at: string
+          created_by: string
+          decision_reason: string | null
+          id: string
+          learning_report_id: string
+          proposed_blueprint_version_id: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_blueprint_version_id: string
+          status: "pending" | "approved" | "rejected"
+        }
+        SetofOptions: { from: "*"; to: "blueprint_change_suggestions"; isOneToOne: true; isSetofReturn: false }
+      }
       define_experiment: {
         Args: {
           p_episode_id: string
@@ -654,6 +785,18 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      record_learning_report: {
+        Args: { p_episode_id: string; p_recommendation: "keep" | "change" | "kill" | "insufficient_data"; p_summary: string }
+        Returns: {
+          created_at: string
+          created_by: string
+          episode_id: string
+          id: string
+          recommendation: "keep" | "change" | "kill" | "insufficient_data"
+          summary: string
+        }
+        SetofOptions: { from: "*"; to: "learning_reports"; isOneToOne: true; isSetofReturn: false }
+      }
       record_weekly_metric_snapshot: {
         Args: { p_captured_at: string; p_episode_id: string; p_metrics: Json }
         Returns: {
@@ -664,6 +807,25 @@ export type Database = {
           metrics: Json
         }
         SetofOptions: { from: "*"; to: "metric_snapshots"; isOneToOne: true; isSetofReturn: false }
+      }
+      review_blueprint_change_suggestion: {
+        Args: { p_decision: "approved" | "rejected"; p_decision_reason: string; p_suggestion_id: string }
+        Returns: {
+          account_id: string
+          created_at: string
+          created_by: string
+          decision_reason: string | null
+          id: string
+          learning_report_id: string
+          proposed_blueprint_version_id: string | null
+          proposed_policy: Json
+          rationale: string
+          reviewed_at: string | null
+          reviewed_by: string | null
+          source_blueprint_version_id: string
+          status: "pending" | "approved" | "rejected"
+        }
+        SetofOptions: { from: "*"; to: "blueprint_change_suggestions"; isOneToOne: true; isSetofReturn: false }
       }
       record_publish_package_verification: {
         Args: { p_episode_id: string; p_file_size: number; p_sha256: string }
