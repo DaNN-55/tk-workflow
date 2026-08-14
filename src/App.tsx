@@ -6,6 +6,8 @@ import { supabase } from "./lib/supabase";
 import { blueprintAssetRoot, defaultBlueprintPolicy, parseBlueprintPolicy, withBlueprintAssetRoot } from "./platform/blueprintPolicy";
 import type { EpisodeStage } from "./platform/types";
 import { createPublicationConfirmation } from "./publishing/publicationConfirmation";
+import { LearningWorkspace } from "./learning/LearningWorkspace";
+import type { SaveExperimentInput, SaveMetricSnapshotInput } from "./learning/LearningWorkspace";
 
 type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
@@ -15,6 +17,8 @@ type Episode = Database["public"]["Tables"]["episodes"]["Row"];
 type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
 type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
+type Experiment = Database["public"]["Tables"]["experiments"]["Row"];
+type MetricSnapshot = Database["public"]["Tables"]["metric_snapshots"]["Row"];
 
 interface ReviewAction {
   approveStage: EpisodeStage;
@@ -33,6 +37,8 @@ interface Workspace {
   artifacts: Artifact[];
   tasks: Task[];
   transitions: Transition[];
+  experiments: Experiment[];
+  metricSnapshots: MetricSnapshot[];
 }
 
 const navigation: Array<{ id: NavigationItem; label: string }> = [
@@ -135,15 +141,17 @@ function artifactPreviewKind(relativePath: string): "image" | "video" | null {
 }
 
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, metricSnapshotsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
     supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
     supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
+    supabase.from("experiments").select("*").order("created_at", { ascending: false }),
+    supabase.from("metric_snapshots").select("*").order("captured_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, metricSnapshotsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -156,6 +164,8 @@ async function loadWorkspace(): Promise<Workspace> {
     artifacts: artifactsResult.data ?? [],
     tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
+    experiments: experimentsResult.data ?? [],
+    metricSnapshots: metricSnapshotsResult.data ?? [],
   };
 }
 
@@ -369,6 +379,50 @@ export function App() {
     }
   }
 
+  async function saveExperiment(input: SaveExperimentInput) {
+    setPendingAction(`experiment-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("define_experiment", {
+        p_episode_id: input.episodeId,
+        p_guardrail_metrics: input.guardrailMetrics,
+        p_hypothesis: input.hypothesis,
+        p_primary_metric: input.primaryMetric,
+        p_primary_variable: input.primaryVariable,
+      });
+      if (error) throw error;
+      setMessage("实验定义已记录，可以按周录入指标。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法保存实验定义。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function saveMetricSnapshot(input: SaveMetricSnapshotInput) {
+    setPendingAction(`metrics-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("record_weekly_metric_snapshot", {
+        p_captured_at: input.capturedAt,
+        p_episode_id: input.episodeId,
+        p_metrics: input.metrics,
+      });
+      if (error) throw error;
+      setMessage("本周指标已记录。再次保存同一周会更新该周数据。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法保存本周指标。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   if (isLoading && session === undefined) return <LoadingScreen />;
   if (!session) return <AuthScreen errorMessage={errorMessage} onSignedIn={() => setMessage("登录成功，正在读取控制数据。") } />;
   if (isLoading && !workspace) return <LoadingScreen />;
@@ -435,6 +489,15 @@ export function App() {
             onSelectEpisode={setSelectedEpisodeId}
             onTransition={transitionEpisode}
             selectedEpisode={selectedEpisode}
+          />
+        ) : activeNavigation === "learning" ? (
+          <LearningWorkspace
+            accountsById={accountsById}
+            episodes={visibleEpisodes}
+            experiments={workspace.experiments}
+            metricSnapshots={workspace.metricSnapshots}
+            onSaveExperiment={saveExperiment}
+            onSaveMetricSnapshot={saveMetricSnapshot}
           />
         ) : (
           <EpisodeWorkspace

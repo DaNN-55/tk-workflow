@@ -323,6 +323,7 @@ export type Database = {
           hypothesis: string
           id: string
           primary_metric: string
+          primary_variable: string
         }
         Insert: {
           created_at?: string
@@ -331,6 +332,7 @@ export type Database = {
           hypothesis: string
           id?: string
           primary_metric: string
+          primary_variable: string
         }
         Update: {
           created_at?: string
@@ -339,6 +341,7 @@ export type Database = {
           hypothesis?: string
           id?: string
           primary_metric?: string
+          primary_variable?: string
         }
         Relationships: [
           {
@@ -590,6 +593,25 @@ export type Database = {
           isSetofReturn: false
         }
       }
+      define_experiment: {
+        Args: {
+          p_episode_id: string
+          p_guardrail_metrics: string[]
+          p_hypothesis: string
+          p_primary_metric: string
+          p_primary_variable: string
+        }
+        Returns: {
+          created_at: string
+          episode_id: string
+          guardrail_metrics: string[]
+          hypothesis: string
+          id: string
+          primary_metric: string
+          primary_variable: string
+        }
+        SetofOptions: { from: "*"; to: "experiments"; isOneToOne: true; isSetofReturn: false }
+      }
       has_required_artifacts: {
         Args: {
           p_episode_id: string
@@ -631,6 +653,17 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      record_weekly_metric_snapshot: {
+        Args: { p_captured_at: string; p_episode_id: string; p_metrics: Json }
+        Returns: {
+          captured_at: string
+          captured_by: string
+          episode_id: string
+          id: string
+          metrics: Json
+        }
+        SetofOptions: { from: "*"; to: "metric_snapshots"; isOneToOne: true; isSetofReturn: false }
       }
       record_publish_package_verification: {
         Args: { p_episode_id: string; p_file_size: number; p_sha256: string }
