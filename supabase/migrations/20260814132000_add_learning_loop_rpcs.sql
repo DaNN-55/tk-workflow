@@ -123,5 +123,7 @@ begin
 end;
 $$;
 
+revoke execute on function public.define_experiment(uuid, text, text, text, text[]) from public, anon;
+revoke execute on function public.record_weekly_metric_snapshot(uuid, timestamptz, jsonb) from public, anon;
 grant execute on function public.define_experiment(uuid, text, text, text, text[]) to authenticated;
 grant execute on function public.record_weekly_metric_snapshot(uuid, timestamptz, jsonb) to authenticated;
