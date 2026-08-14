@@ -10,12 +10,12 @@ export const defaultBlueprintPolicy = {
   executors: {
     script_writing: {
       provider: "codex",
-      model: "gpt-5.6-codex",
+      model: "gpt-5.6-luna",
       prompt_version: "script-writing-v1",
     },
     visual_planning: {
       provider: "codex",
-      model: "gpt-5.6-codex",
+      model: "gpt-5.6-luna",
       prompt_version: "visual-planning-v1",
     },
   },
