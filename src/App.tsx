@@ -335,17 +335,19 @@ export function App() {
     }
   }
 
-  async function createBlueprint(policy: Json) {
-    if (!selectedAccount) return;
+  async function createBlueprint(policy: Json): Promise<Blueprint | null> {
+    if (!selectedAccount) return null;
     setPendingAction("blueprint");
     setErrorMessage("");
     try {
-      const { error } = await supabase.rpc("create_blueprint_version", { p_account_id: selectedAccount.id, p_policy: policy });
+      const { data, error } = await supabase.rpc("create_blueprint_version", { p_account_id: selectedAccount.id, p_policy: policy });
       if (error) throw error;
       setMessage("已创建未激活的蓝图版本；请检查后再激活。");
       await refreshWorkspace();
+      return data;
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "创建蓝图版本失败。");
+      return null;
     } finally {
       setPendingAction("");
     }
@@ -572,14 +574,14 @@ export function App() {
   return (
     <main className="app-shell" data-sidebar={sidebarCollapsed ? "collapsed" : "expanded"} data-theme={theme}>
       <aside className="sidebar" aria-label="主导航">
-        <div className="wordmark">Loop 控制台</div>
+        <div className="wordmark"><img alt="Loop 控制台" src="/brand/loop-mark.png" /><span>Loop 控制台</span></div>
         <nav className="navigation"><NavigationButtons activeNavigation={activeNavigation} onSelect={changeNavigation} /></nav>
         <div className="sidebar-footer">
           <div className="sidebar-utilities">
             <button aria-label={theme === "light" ? "切换至深色模式" : "切换至浅色模式"} className="sidebar-utility" onClick={changeTheme} title={theme === "light" ? "深色模式" : "浅色模式"} type="button"><Icon name={theme === "light" ? "Moon" : "Sun"} /></button>
-            <button aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} className="sidebar-utility" onClick={changeSidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} type="button"><Icon name="PanelLeft" /></button>
+            <button aria-label={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} className="sidebar-collapse-button sidebar-utility" onClick={changeSidebarCollapsed} title={sidebarCollapsed ? "展开侧栏" : "收起侧栏"} type="button"><Icon name="PanelLeft" /></button>
+            <OwnerMenu onOpenSettings={() => setShowPasswordForm(true)} onSignOut={() => void supabase.auth.signOut()} />
           </div>
-          <OwnerMenu onOpenSettings={() => setShowPasswordForm(true)} onSignOut={() => void supabase.auth.signOut()} />
         </div>
       </aside>
 
@@ -748,21 +750,30 @@ function BootstrapScreen({ errorMessage, isPending, onSubmit }: { errorMessage: 
 function LoadingScreen() { return <main className="access-shell"><div className="loading-mark">正在连接受控平台…</div></main>; }
 function ErrorScreen({ errorMessage, onRetry }: { errorMessage: string; onRetry: () => Promise<void> }) { return <main className="access-shell"><section className="access-card"><h1>无法读取控制数据</h1><p className="form-error">{errorMessage}</p><button className="button button-primary" onClick={() => void onRetry()} type="button">重试</button></section></main>; }
 
-function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate, onCreateBlueprint, onSelectAccount }: { account: Account | null; accounts: Account[]; blueprints: Blueprint[]; isPending: string; onActivate: (id: string) => Promise<void>; onCreateBlueprint: (policy: Json) => Promise<void>; onSelectAccount: (id: string) => void }) {
+export function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate, onCreateBlueprint, onSelectAccount }: { account: Account | null; accounts: Account[]; blueprints: Blueprint[]; isPending: string; onActivate: (id: string) => Promise<void>; onCreateBlueprint: (policy: Json) => Promise<Blueprint | null>; onSelectAccount: (id: string) => void }) {
   const [policy, setPolicy] = useState("");
   const [assetRoot, setAssetRoot] = useState("");
   const [formError, setFormError] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [selectedBlueprintId, setSelectedBlueprintId] = useState("");
   const activePolicy = account ? blueprints.find((blueprint) => blueprint.id === account.current_blueprint_version_id)?.policy ?? defaultBlueprintPolicy : defaultBlueprintPolicy;
+  const selectedBlueprint = blueprints.find((blueprint) => blueprint.id === selectedBlueprintId) ?? blueprints.find((blueprint) => blueprint.id === account?.current_blueprint_version_id) ?? null;
 
   useEffect(() => {
-    if (!account) {
+    setSelectedBlueprintId(account?.current_blueprint_version_id ?? "");
+    setIsEditing(false);
+    setFormError("");
+  }, [account?.id]);
+
+  useEffect(() => {
+    if (!selectedBlueprint) {
       setPolicy("");
       setAssetRoot("");
       return;
     }
-    setPolicy(formatPolicy(activePolicy));
-    setAssetRoot(blueprintAssetRoot(activePolicy));
-  }, [account, activePolicy]);
+    setPolicy(formatPolicy(selectedBlueprint.policy));
+    setAssetRoot(blueprintAssetRoot(selectedBlueprint.policy));
+  }, [selectedBlueprint]);
 
   function updatePolicy(source: string) {
     setPolicy(source);
@@ -773,17 +784,36 @@ function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate
     }
   }
 
-  function createConfiguredBlueprint() {
+  async function createConfiguredBlueprint(activateAfterSave: boolean) {
     try {
       setFormError("");
-      void onCreateBlueprint(withBlueprintAssetRoot(parseBlueprintPolicy(policy), assetRoot));
+      const createdBlueprint = await onCreateBlueprint(withBlueprintAssetRoot(parseBlueprintPolicy(policy), assetRoot));
+      if (!createdBlueprint) return;
+      setSelectedBlueprintId(createdBlueprint.id);
+      setIsEditing(false);
+      if (activateAfterSave) await onActivate(createdBlueprint.id);
     } catch (error) {
       setFormError(error instanceof Error ? error.message : "规则无法解析。");
     }
   }
 
+  function selectBlueprint(blueprintId: string) {
+    setSelectedBlueprintId(blueprintId);
+    setIsEditing(false);
+    setFormError("");
+  }
+
+  function beginEditing() {
+    if (!selectedBlueprint) return;
+    setPolicy(formatPolicy(selectedBlueprint.policy));
+    setAssetRoot(blueprintAssetRoot(selectedBlueprint.policy));
+    setFormError("");
+    setIsEditing(true);
+  }
+
   if (!account) return <div className="empty-state">没有可读取的账号。</div>;
-  return <><div className="account-selector"><label>当前账号<select onChange={(event) => onSelectAccount(event.target.value)} value={account.id}>{accounts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><p>{policyPositioning(activePolicy)}<br />资产目录：{policyAssetRoot(activePolicy)}</p></div><div className="account-layout"><section className="blueprint-list"><h2>蓝图版本</h2>{blueprints.map((blueprint) => <article className={`blueprint-card ${blueprint.is_active ? "is-active" : ""}`} key={blueprint.id}><div><strong>v{blueprint.version}</strong><span>{blueprint.is_active ? "当前生效" : "待激活"}</span></div><p>{policyPositioning(blueprint.policy)}<br />资产目录：{policyAssetRoot(blueprint.policy)}</p>{blueprint.is_active ? null : <button className="button button-secondary" disabled={isPending === `activate-${blueprint.id}`} onClick={() => void onActivate(blueprint.id)} type="button">激活此版本</button>}</article>)}</section><section className="blueprint-editor"><h2>资产目录与蓝图</h2><p>目录由运行 Worker 的本机验证。保存会创建新蓝图版本；激活后才用于之后新建的生产单，历史生产单不变。</p><label>资产目录<input aria-label="资产目录" onChange={(event) => setAssetRoot(event.target.value)} placeholder="例如：/Volumes/素材盘/tk-workflow/dao" value={assetRoot} /></label><p className="field-hint">可填写 macOS、Windows 或 Linux 的本机目录。浏览器不会读取这个目录。</p><label>蓝图规则（JSON）<textarea aria-label="新蓝图规则" onChange={(event) => updatePolicy(event.target.value)} rows={14} value={policy} /></label><button className="button button-primary" disabled={isPending === "blueprint"} onClick={createConfiguredBlueprint} type="button">{isPending === "blueprint" ? "创建中…" : "保存为新版本"}</button>{formError ? <p className="form-error">{formError}</p> : null}</section></div></>;
+  if (!selectedBlueprint) return <div className="empty-state">该账号没有可读取的蓝图版本。</div>;
+  return <><div className="account-selector"><label>当前账号<select onChange={(event) => onSelectAccount(event.target.value)} value={account.id}>{accounts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><p>{policyPositioning(activePolicy)}<br />资产目录：{policyAssetRoot(activePolicy)}</p></div><div className="account-layout"><section className="blueprint-list"><h2>蓝图版本</h2>{blueprints.map((blueprint) => <button aria-pressed={selectedBlueprint.id === blueprint.id} className={`blueprint-card ${blueprint.is_active ? "is-active" : ""} ${selectedBlueprint.id === blueprint.id ? "is-selected" : ""}`} key={blueprint.id} onClick={() => selectBlueprint(blueprint.id)} type="button"><div><strong>v{blueprint.version}</strong><span>{blueprint.is_active ? "当前生效" : "待激活"}</span></div><p>{policyPositioning(blueprint.policy)}<br />资产目录：{policyAssetRoot(blueprint.policy)}</p></button>)}</section><section className="blueprint-editor"><header className="blueprint-editor-heading"><div><h2>蓝图 v{selectedBlueprint.version}</h2><p>{selectedBlueprint.is_active ? "当前生效版本；仅影响之后新建的生产单。" : "待激活版本；查看确认后可直接启用。"}</p></div><span>{selectedBlueprint.is_active ? "当前生效" : "待激活"}</span></header>{isEditing ? <><p className="blueprint-editor-note">正在基于 v{selectedBlueprint.version} 创建新版本；不会修改已保存的历史版本。</p><label>资产目录<input aria-label="资产目录" onChange={(event) => setAssetRoot(event.target.value)} placeholder="例如：/Volumes/素材盘/tk-workflow/dao" value={assetRoot} /></label><p className="field-hint">可填写 macOS、Windows 或 Linux 的本机目录。浏览器不会读取这个目录。</p><label>蓝图规则（JSON）<textarea aria-label="新蓝图规则" onChange={(event) => updatePolicy(event.target.value)} rows={14} value={policy} /></label><div className="blueprint-editor-actions"><button className="button button-secondary" disabled={isPending === "blueprint"} onClick={() => setIsEditing(false)} type="button">取消编辑</button><button className="button button-secondary" disabled={isPending === "blueprint"} onClick={() => void createConfiguredBlueprint(false)} type="button">{isPending === "blueprint" ? "保存中…" : "保存为新版本"}</button><button className="button button-primary" disabled={isPending === "blueprint"} onClick={() => void createConfiguredBlueprint(true)} type="button">{isPending === "blueprint" ? "保存中…" : "保存并激活"}</button></div></> : <><section className="blueprint-view"><h3>资产目录</h3><code>{policyAssetRoot(selectedBlueprint.policy)}</code><p>路径由运行 Worker 的本机验证，浏览器不会读取该目录。</p></section><section className="blueprint-view"><h3>蓝图规则</h3><pre>{formatPolicy(selectedBlueprint.policy)}</pre></section><div className="blueprint-editor-actions"><button className="button button-secondary" onClick={beginEditing} type="button">以此版本编辑</button>{selectedBlueprint.is_active ? null : <button className="button button-primary" disabled={isPending === `activate-${selectedBlueprint.id}`} onClick={() => void onActivate(selectedBlueprint.id)} type="button">{isPending === `activate-${selectedBlueprint.id}` ? "激活中…" : "激活此版本"}</button>}</div></>}{formError ? <p className="form-error">{formError}</p> : null}</section></div></>;
 }
 
 function EpisodeWorkspace({ accounts, accountsById, artifacts, blueprintsById, currentNavigation, episodes, filter, onFilter, onSelectEpisode, selectedEpisode }: { accounts: Account[]; accountsById: Map<string, Account>; artifacts: Artifact[]; blueprintsById: Map<string, Blueprint>; currentNavigation: NavigationItem; episodes: Episode[]; filter: string; onFilter: (value: string) => void; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
