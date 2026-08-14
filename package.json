@@ -14,7 +14,9 @@
     "publish:prepare": "npm run worker:build && node dist/worker/publishing/publishPackageCli.js",
     "publish:verify": "npm run worker:build && node dist/worker/publishing/publishPackageVerifyCli.js",
     "orchestrator:build": "tsc -p tsconfig.orchestrator.json",
-    "orchestrator:run": "npm run orchestrator:build && node dist/orchestration/orchestration/loopOrchestratorCli.js"
+    "orchestrator:run": "npm run orchestrator:build && node dist/orchestration/orchestration/loopOrchestratorCli.js",
+    "db:migrations:check": "node scripts/supabase-migrations.mjs",
+    "db:migrations:deploy": "node scripts/supabase-migrations.mjs --deploy"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
