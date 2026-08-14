@@ -353,6 +353,8 @@ export type Database = {
           blueprint_version_id: string
           created_at: string
           id: string
+          main_script_revision_id?: string | null
+          series_version_id?: string | null
           stage: Database["public"]["Enums"]["episode_stage"]
           title: string
           updated_at: string
@@ -362,6 +364,8 @@ export type Database = {
           blueprint_version_id: string
           created_at?: string
           id?: string
+          main_script_revision_id?: string | null
+          series_version_id?: string | null
           stage?: Database["public"]["Enums"]["episode_stage"]
           title: string
           updated_at?: string
@@ -371,6 +375,8 @@ export type Database = {
           blueprint_version_id?: string
           created_at?: string
           id?: string
+          main_script_revision_id?: string | null
+          series_version_id?: string | null
           stage?: Database["public"]["Enums"]["episode_stage"]
           title?: string
           updated_at?: string
@@ -388,6 +394,13 @@ export type Database = {
             columns: ["account_id", "blueprint_version_id"]
             isOneToOne: false
             referencedRelation: "account_blueprint_versions"
+            referencedColumns: ["account_id", "id"]
+          },
+          {
+            foreignKeyName: "episodes_series_version_belongs_to_account_fk"
+            columns: ["account_id", "series_version_id"]
+            isOneToOne: false
+            referencedRelation: "series_versions"
             referencedColumns: ["account_id", "id"]
           },
         ]
@@ -494,6 +507,90 @@ export type Database = {
             isOneToOne: true
             referencedRelation: "episodes"
             referencedColumns: ["id"]
+          },
+        ]
+      }
+      production_material_revisions: {
+        Row: {
+          created_at: string
+          created_by: string
+          episode_id: string
+          file_size: number
+          id: string
+          is_main_script: boolean
+          material_type: string
+          mime_type: string
+          revision_number: number
+          sha256: string
+          source_kind: string
+          source_path: string
+          storage_path: string
+        }
+        Insert: {
+          created_at?: string
+          created_by: string
+          episode_id: string
+          file_size: number
+          id?: string
+          is_main_script?: boolean
+          material_type: string
+          mime_type: string
+          revision_number: number
+          sha256: string
+          source_kind: string
+          source_path: string
+          storage_path: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string
+          episode_id?: string
+          file_size?: number
+          id?: string
+          is_main_script?: boolean
+          material_type?: string
+          mime_type?: string
+          revision_number?: number
+          sha256?: string
+          source_kind?: string
+          source_path?: string
+          storage_path?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "production_material_revisions_episode_id_fkey"
+            columns: ["episode_id"]
+            isOneToOne: false
+            referencedRelation: "episodes"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      series: {
+        Row: { account_id: string; created_at: string; id: string; name: string }
+        Insert: { account_id: string; created_at?: string; id?: string; name: string }
+        Update: { account_id?: string; created_at?: string; id?: string; name?: string }
+        Relationships: [
+          {
+            foreignKeyName: "series_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      series_versions: {
+        Row: { account_id: string; created_at: string; created_by: string; id: string; rules: Json; series_id: string; version: number }
+        Insert: { account_id: string; created_at?: string; created_by: string; id?: string; rules?: Json; series_id: string; version: number }
+        Update: { account_id?: string; created_at?: string; created_by?: string; id?: string; rules?: Json; series_id?: string; version?: number }
+        Relationships: [
+          {
+            foreignKeyName: "series_versions_account_id_series_id_fkey"
+            columns: ["account_id", "series_id"]
+            isOneToOne: false
+            referencedRelation: "series"
+            referencedColumns: ["account_id", "id"]
           },
         ]
       }
@@ -687,6 +784,7 @@ export type Database = {
         Args: {
           p_account_id: string
           p_blueprint_version_id: string
+          p_series_version_id: string | null
           p_title: string
         }
         Returns: {
@@ -694,6 +792,8 @@ export type Database = {
           blueprint_version_id: string
           created_at: string
           id: string
+          main_script_revision_id: string | null
+          series_version_id: string | null
           stage: Database["public"]["Enums"]["episode_stage"]
           title: string
           updated_at: string
@@ -704,6 +804,44 @@ export type Database = {
           isOneToOne: true
           isSetofReturn: false
         }
+      }
+      create_series: {
+        Args: { p_account_id: string; p_name: string; p_rules: Json }
+        Returns: {
+          account_id: string
+          created_at: string
+          created_by: string
+          id: string
+          rules: Json
+          series_id: string
+          version: number
+        }
+        SetofOptions: {
+          from: "*"
+          to: "series_versions"
+          isOneToOne: true
+          isSetofReturn: false
+        }
+      }
+      import_production_material: {
+        Args: {
+          p_episode_id: string
+          p_file_size: number
+          p_is_main_script: boolean
+          p_material_type: string
+          p_mime_type: string
+          p_sha256: string
+          p_source_kind: string
+          p_source_path: string
+          p_storage_path: string
+        }
+        Returns: Database["public"]["Tables"]["production_material_revisions"]["Row"]
+        SetofOptions: { from: "*"; to: "production_material_revisions"; isOneToOne: true; isSetofReturn: false }
+      }
+      update_episode_title: {
+        Args: { p_episode_id: string; p_title: string }
+        Returns: Database["public"]["Tables"]["episodes"]["Row"]
+        SetofOptions: { from: "*"; to: "episodes"; isOneToOne: true; isSetofReturn: false }
       }
       create_blueprint_change_suggestion: {
         Args: { p_learning_report_id: string; p_proposed_policy: Json; p_rationale: string }
@@ -866,6 +1004,7 @@ export type Database = {
     }
     Enums: {
       episode_stage:
+        | "waiting_input"
         | "brief_draft"
         | "script_draft"
         | "script_review"
@@ -1015,6 +1154,7 @@ export const Constants = {
   public: {
     Enums: {
       episode_stage: [
+        "waiting_input",
         "brief_draft",
         "script_draft",
         "script_review",

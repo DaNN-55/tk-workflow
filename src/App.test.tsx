@@ -1,6 +1,6 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { App } from "./App";
+import { App, SeriesSettings } from "./App";
 import { defaultBlueprintPolicy, parseBlueprintPolicy, withBlueprintAssetRoot } from "./platform/blueprintPolicy";
 
 vi.mock("./lib/supabase", () => ({
@@ -33,5 +33,16 @@ describe("approval console", () => {
       ...defaultBlueprintPolicy,
       asset_root: "/Volumes/Content Disk/tk-workflow/dao",
     });
+  });
+
+  it("creates the first series version from account settings", async () => {
+    const onCreate = vi.fn().mockResolvedValue(undefined);
+    render(<SeriesSettings isPending={false} onCreate={onCreate} series={[]} seriesVersions={[]} />);
+
+    fireEvent.change(screen.getByRole("textbox", { name: "系列名称" }), { target: { value: "越南道士" } });
+    fireEvent.change(screen.getByRole("textbox", { name: "系列规则" }), { target: { value: '{"tone":"calm"}' } });
+    fireEvent.click(screen.getByRole("button", { name: "创建系列 v1" }));
+
+    await waitFor(() => expect(onCreate).toHaveBeenCalledWith({ name: "越南道士", rules: { tone: "calm" } }));
   });
 });

@@ -1,13 +1,17 @@
 import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { createClient } from "@supabase/supabase-js";
+import { createHash } from "node:crypto";
 import { createReadStream, promises as fs } from "node:fs";
-import { extname, isAbsolute, parse, relative, resolve } from "node:path";
+import { basename, extname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadEnv, type Plugin } from "vite";
 
 const localArtifactRoute = "/_local-artifact";
 const localEpisodeDirectoryRoute = "/_local-episode-directory";
+const localProductionMaterialRoute = "/_production-material";
+const maxProductionMaterialBytes = 100 * 1024 * 1024;
+const maxEncodedMaterialRequestBytes = 140 * 1024 * 1024;
 
 const mediaTypes: Record<string, string> = {
   ".avif": "image/avif",
@@ -162,7 +166,130 @@ export async function createLocalEpisodeDirectory(assetRoot: string, episodeId: 
   const resolvedRoot = await fs.realpath(assetRoot);
   if (isFilesystemRoot(resolvedRoot)) throw new Error("资产根不能是文件系统根目录。");
   const resolvedEpisodesDirectory = await ensureDirectoryWithinRoot(resolvedRoot, resolve(resolvedRoot, "episodes"));
-  return ensureDirectoryWithinRoot(resolvedEpisodesDirectory, resolve(resolvedEpisodesDirectory, episodeId));
+  const episodeDirectory = await ensureDirectoryWithinRoot(resolvedEpisodesDirectory, resolve(resolvedEpisodesDirectory, episodeId));
+  await ensureDirectoryWithinRoot(episodeDirectory, resolve(episodeDirectory, "input"));
+  await ensureDirectoryWithinRoot(episodeDirectory, resolve(episodeDirectory, "materials"));
+  return episodeDirectory;
+}
+
+interface MaterialSnapshotInput {
+  sourceKind: "directory" | "file" | "paste";
+  sourcePath: string;
+  content?: Uint8Array;
+}
+
+interface MaterialSnapshot {
+  sourcePath: string;
+  storagePath: string;
+  sha256: string;
+  fileSize: number;
+}
+
+export async function saveProductionMaterialSnapshot(assetRoot: string, episodeId: string, input: MaterialSnapshotInput): Promise<MaterialSnapshot> {
+  if (!isEpisodeId(episodeId)) throw new Error("无效的 Episode ID。");
+  if (!isSafeRelativeArtifactPath(input.sourcePath)) throw new Error("输入文件路径无效。");
+  const episodeDirectory = await createLocalEpisodeDirectory(assetRoot, episodeId);
+  let content: Uint8Array;
+  if (input.sourceKind === "directory") {
+    const inputDirectory = await fs.realpath(join(episodeDirectory, "input"));
+    const sourceFile = await fs.realpath(resolve(inputDirectory, input.sourcePath));
+    if (!isDescendant(inputDirectory, sourceFile)) throw new Error("输入文件路径无效。");
+    const sourceStat = await fs.stat(sourceFile);
+    if (!sourceStat.isFile()) throw new Error("输入路径不是文件。");
+    content = await fs.readFile(sourceFile);
+  } else {
+    if (!input.content) throw new Error("文件选择或粘贴导入缺少内容。");
+    content = input.content.slice();
+  }
+  if (content.byteLength > maxProductionMaterialBytes) throw new Error("生产材料超过 100 MB 上限。");
+
+  const sha256 = createHash("sha256").update(content).digest("hex");
+  const fileName = basename(input.sourcePath);
+  const storagePath = `episodes/${episodeId}/materials/${sha256}-${fileName}`;
+  const targetPath = join(assetRoot, storagePath);
+  try {
+    await fs.writeFile(targetPath, content, { flag: "wx" });
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error;
+    const existingHash = createHash("sha256").update(await fs.readFile(targetPath)).digest("hex");
+    if (existingHash !== sha256) throw new Error("已有材料快照与内容哈希不一致。");
+  }
+  return { sourcePath: input.sourcePath, storagePath, sha256, fileSize: content.byteLength };
+}
+
+async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    size += buffer.byteLength;
+    if (size > maxEncodedMaterialRequestBytes) throw new Error("编码后的生产材料请求超过 140 MB 上限。");
+    chunks.push(buffer);
+  }
+  const parsed: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") throw new Error("生产材料请求无效。");
+  return parsed as Record<string, unknown>;
+}
+
+export function serveProductionMaterial(supabaseUrl: string | undefined, supabasePublishableKey: string | undefined) {
+  return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    if (request.method !== "POST") {
+      response.statusCode = 405;
+      response.end();
+      return;
+    }
+    const authorization = request.headers.authorization;
+    if (!authorization?.startsWith("Bearer ")) {
+      response.statusCode = 401;
+      response.end("需要 Owner 登录会话。");
+      return;
+    }
+    const episodeId = new URL(request.url ?? "", "http://127.0.0.1").searchParams.get("episode") ?? "";
+    if (!isEpisodeId(episodeId)) {
+      response.statusCode = 400;
+      response.end("无效的 Episode ID。");
+      return;
+    }
+    try {
+      const assetRoot = await assetRootForOwnedEpisode({ authorization, episodeId, supabasePublishableKey, supabaseUrl });
+      if (!assetRoot || !isAbsolute(assetRoot)) throw new Error("未找到可写入的 Episode 资产根。");
+      const body = await readJsonBody(request);
+      const sourceKind = body.sourceKind;
+      const sourcePath = body.sourcePath;
+      const materialType = body.materialType;
+      const mimeType = body.mimeType;
+      const isMainScript = body.isMainScript;
+      if ((sourceKind !== "directory" && sourceKind !== "file" && sourceKind !== "paste") || typeof sourcePath !== "string" || typeof materialType !== "string" || typeof mimeType !== "string" || typeof isMainScript !== "boolean") {
+        throw new Error("生产材料元数据无效。");
+      }
+      let content: Uint8Array | undefined;
+      if (sourceKind !== "directory") {
+        if (typeof body.contentBase64 !== "string") throw new Error("生产材料内容无效。");
+        content = Buffer.from(body.contentBase64, "base64");
+      }
+      const snapshot = await saveProductionMaterialSnapshot(assetRoot, episodeId, { content, sourceKind, sourcePath });
+      if (!supabaseUrl || !supabasePublishableKey) throw new Error("Supabase 连接未配置。");
+      const supabase = createClient(supabaseUrl, supabasePublishableKey, { auth: { persistSession: false }, global: { headers: { Authorization: authorization } } });
+      const { data, error } = await supabase.rpc("import_production_material", {
+        p_episode_id: episodeId,
+        p_file_size: snapshot.fileSize,
+        p_is_main_script: isMainScript,
+        p_material_type: materialType,
+        p_mime_type: mimeType,
+        p_sha256: snapshot.sha256,
+        p_source_kind: sourceKind,
+        p_source_path: snapshot.sourcePath,
+        p_storage_path: snapshot.storagePath,
+      });
+      if (error) throw error;
+      response.setHeader("Content-Type", "application/json");
+      response.statusCode = 201;
+      response.end(JSON.stringify(data));
+    } catch (error) {
+      response.statusCode = 400;
+      response.end(error instanceof Error ? error.message : "无法导入生产材料。");
+    }
+  };
 }
 
 async function assetRootForIndexedArtifact(input: { authorization: string; episodeId: string; relativePath: string; supabasePublishableKey: string | undefined; supabaseUrl: string | undefined }): Promise<string | null> {
@@ -203,15 +330,18 @@ async function assetRootForOwnedEpisode(input: { authorization: string; episodeI
 function localArtifactPreviewPlugin(supabaseUrl: string | undefined, supabasePublishableKey: string | undefined): Plugin {
   const artifactMiddleware = serveLocalArtifact(supabaseUrl, supabasePublishableKey);
   const directoryMiddleware = serveLocalEpisodeDirectory(supabaseUrl, supabasePublishableKey);
+  const productionMaterialMiddleware = serveProductionMaterial(supabaseUrl, supabasePublishableKey);
   return {
     name: "local-artifact-preview",
     configureServer(server) {
       server.middlewares.use(localArtifactRoute, artifactMiddleware);
       server.middlewares.use(localEpisodeDirectoryRoute, directoryMiddleware);
+      server.middlewares.use(localProductionMaterialRoute, productionMaterialMiddleware);
     },
     configurePreviewServer(server) {
       server.middlewares.use(localArtifactRoute, artifactMiddleware);
       server.middlewares.use(localEpisodeDirectoryRoute, directoryMiddleware);
+      server.middlewares.use(localProductionMaterialRoute, productionMaterialMiddleware);
     },
   };
 }

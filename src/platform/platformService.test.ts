@@ -60,7 +60,7 @@ describe("platform service", () => {
     ).rejects.toBeInstanceOf(InvalidTransitionError);
   });
 
-  it("creates an episode with its blueprint snapshot and first task", async () => {
+  it("creates an episode waiting for explicit production input", async () => {
     const platform = createPlatformService(createInMemoryPlatformRepository());
 
     const episode = await platform.createEpisode({
@@ -72,11 +72,94 @@ describe("platform service", () => {
     expect(episode).toMatchObject({
       accountId: "account-2",
       blueprintVersionId: "blueprint-4",
-      status: "brief_draft",
+      status: "waiting_input",
       title: "A new series entry",
     });
-    expect(await platform.listTasks(episode.id)).toContainEqual(
-      expect.objectContaining({ type: "draft_brief", status: "ready" }),
-    );
+    expect(await platform.listTasks(episode.id)).toEqual([]);
+  });
+
+  it("creates an untitled episode with an optional fixed series version", async () => {
+    const platform = createPlatformService(createInMemoryPlatformRepository());
+
+    const episode = await platform.createEpisode({
+      accountId: "account-2",
+      blueprintVersionId: "blueprint-4",
+      seriesVersionId: "series-version-3",
+      title: "",
+    });
+
+    expect(episode).toMatchObject({
+      accountId: "account-2",
+      blueprintVersionId: "blueprint-4",
+      seriesVersionId: "series-version-3",
+      status: "waiting_input",
+      title: "",
+    });
+  });
+
+  it("imports a main script as an immutable material revision", async () => {
+    const platform = createPlatformService(createInMemoryPlatformRepository());
+    const episode = await platform.createEpisode({
+      accountId: "account-2",
+      blueprintVersionId: "blueprint-4",
+      title: "",
+    });
+    const sourceContent = new TextEncoder().encode("First script");
+
+    const revision = await platform.importMaterial({
+      content: sourceContent,
+      episodeId: episode.id,
+      isMainScript: true,
+      materialType: "script",
+      mimeType: "text/plain",
+      sourceKind: "directory",
+      sourcePath: "inbox/script.txt",
+    });
+    sourceContent.fill(0);
+
+    expect(revision).toMatchObject({
+      episodeId: episode.id,
+      fileSize: 12,
+      isMainScript: true,
+      sha256: "6c9b61c88d4a2f2a053a90540e861226ed0b1ca25396acedf22ef3f5453c1d62",
+      sourceKind: "directory",
+      sourcePath: "inbox/script.txt",
+    });
+    expect(new TextDecoder().decode((await platform.listMaterialRevisions(episode.id))[0]?.content)).toBe("First script");
+    expect(await platform.listEpisodes()).toContainEqual(expect.objectContaining({ id: episode.id, status: "script_approved" }));
+  });
+
+  it("updates episode title without invalidating imported content", async () => {
+    const platform = createPlatformService(createInMemoryPlatformRepository());
+    const episode = await platform.createEpisode({
+      accountId: "account-2",
+      blueprintVersionId: "blueprint-4",
+      title: "",
+    });
+    const revision = await platform.importMaterial({
+      content: new TextEncoder().encode("Approved source"),
+      episodeId: episode.id,
+      isMainScript: true,
+      materialType: "script",
+      mimeType: "text/plain",
+      sourceKind: "paste",
+      sourcePath: "pasted-script.txt",
+    });
+
+    const renamed = await platform.updateEpisodeTitle(episode.id, "A title chosen later");
+
+    expect(renamed.title).toBe("A title chosen later");
+    expect(await platform.listMaterialRevisions(episode.id)).toContainEqual(revision);
+  });
+
+  it("lists episodes by fixed series version with their coarse production stage", async () => {
+    const platform = createPlatformService(createInMemoryPlatformRepository());
+    await platform.createEpisode({ accountId: "account-2", blueprintVersionId: "blueprint-4", seriesVersionId: "series-version-1", title: "First" });
+    const matchingEpisode = await platform.createEpisode({ accountId: "account-2", blueprintVersionId: "blueprint-4", seriesVersionId: "series-version-2", title: "Second" });
+    await platform.createEpisode({ accountId: "account-2", blueprintVersionId: "blueprint-4", title: "Standalone" });
+
+    expect(await platform.listEpisodes({ seriesVersionId: "series-version-2" })).toEqual([
+      expect.objectContaining({ id: matchingEpisode.id, status: "waiting_input" }),
+    ]);
   });
 });

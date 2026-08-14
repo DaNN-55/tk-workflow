@@ -1,4 +1,4 @@
-import type { AuditEvent, Episode, Task } from "./types";
+import type { AuditEvent, Episode, ProductionMaterialRevision, Task } from "./types";
 
 export interface PlatformRepository {
   createEpisode(episode: Episode): Promise<void>;
@@ -9,4 +9,6 @@ export interface PlatformRepository {
   listTasks(episodeId: string): Promise<Task[]>;
   createAuditEvent(event: AuditEvent): Promise<void>;
   listAuditEvents(episodeId: string): Promise<AuditEvent[]>;
+  createMaterialRevision(revision: ProductionMaterialRevision): Promise<void>;
+  listMaterialRevisions(episodeId: string): Promise<ProductionMaterialRevision[]>;
 }

@@ -2,11 +2,11 @@
 
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { mkdtemp, rm, stat, symlink } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createLocalEpisodeDirectory, serveLocalEpisodeDirectory } from "../vite.config";
+import { createLocalEpisodeDirectory, saveProductionMaterialSnapshot, serveLocalEpisodeDirectory } from "../vite.config";
 
 const episodeId = "00000000-0000-0000-0000-000000000000";
 let server: ReturnType<typeof createServer>;
@@ -64,6 +64,40 @@ describe("本地 Episode 目录路由", () => {
       await expect(stat(join(outside, episodeId))).rejects.toMatchObject({ code: "ENOENT" });
     } finally {
       await Promise.all([rm(root, { force: true, recursive: true }), rm(outside, { force: true, recursive: true })]);
+    }
+  });
+
+  it("把目录文件固定为内容寻址的生产材料副本", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tk-workflow-material-"));
+    try {
+      const episodeDirectory = await createLocalEpisodeDirectory(root, episodeId);
+      await writeFile(join(episodeDirectory, "input", "script.txt"), "First script");
+
+      const snapshot = await saveProductionMaterialSnapshot(root, episodeId, {
+        sourceKind: "directory",
+        sourcePath: "script.txt",
+      });
+      await writeFile(join(episodeDirectory, "input", "script.txt"), "Changed outside");
+
+      expect(snapshot).toMatchObject({
+        fileSize: 12,
+        sha256: "6c9b61c88d4a2f2a053a90540e861226ed0b1ca25396acedf22ef3f5453c1d62",
+        sourcePath: "script.txt",
+        storagePath: `episodes/${episodeId}/materials/6c9b61c88d4a2f2a053a90540e861226ed0b1ca25396acedf22ef3f5453c1d62-script.txt`,
+      });
+      expect(await readFile(join(root, snapshot.storagePath), "utf8")).toBe("First script");
+    } finally {
+      await rm(root, { force: true, recursive: true });
+    }
+  });
+
+  it("拒绝从 Episode 输入目录之外导入文件", async () => {
+    const root = await mkdtemp(join(tmpdir(), "tk-workflow-material-"));
+    try {
+      await createLocalEpisodeDirectory(root, episodeId);
+      await expect(saveProductionMaterialSnapshot(root, episodeId, { sourceKind: "directory", sourcePath: "../secret.txt" })).rejects.toThrow("输入文件路径无效");
+    } finally {
+      await rm(root, { force: true, recursive: true });
     }
   });
 });

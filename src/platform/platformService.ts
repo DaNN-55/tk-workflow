@@ -4,11 +4,14 @@ import type {
   CreateEpisodeInput,
   Episode,
   EpisodeStage,
+  ImportMaterialInput,
+  ProductionMaterialRevision,
   Task,
   TransitionEpisodeInput,
 } from "./types";
 
 const allowedTransitions: Readonly<Record<EpisodeStage, readonly EpisodeStage[]>> = {
+  waiting_input: ["script_draft", "script_approved"],
   brief_draft: ["script_draft"],
   script_draft: ["script_review"],
   script_review: ["script_draft", "script_approved"],
@@ -63,9 +66,17 @@ export class EpisodeNotFoundError extends Error {
 export interface PlatformService {
   createEpisode(input: CreateEpisodeInput): Promise<Episode>;
   transitionEpisode(input: TransitionEpisodeInput): Promise<Episode>;
-  listEpisodes(): Promise<Episode[]>;
+  listEpisodes(filter?: { seriesVersionId?: string | null }): Promise<Episode[]>;
   listTasks(episodeId: string): Promise<Task[]>;
   listAuditEvents(episodeId: string): Promise<AuditEvent[]>;
+  importMaterial(input: ImportMaterialInput): Promise<ProductionMaterialRevision>;
+  listMaterialRevisions(episodeId: string): Promise<ProductionMaterialRevision[]>;
+  updateEpisodeTitle(episodeId: string, title: string): Promise<Episode>;
+}
+
+async function sha256Hex(content: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", content.slice().buffer);
+  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function createPlatformService(repository: PlatformRepository): PlatformService {
@@ -76,28 +87,20 @@ export function createPlatformService(repository: PlatformRepository): PlatformS
         id: crypto.randomUUID(),
         accountId: input.accountId,
         blueprintVersionId: input.blueprintVersionId,
+        seriesVersionId: input.seriesVersionId ?? null,
         title: input.title,
-        status: "brief_draft",
+        status: "waiting_input",
         createdAt: now,
         updatedAt: now,
       };
-      const task: Task = {
-        id: crypto.randomUUID(),
-        episodeId: episode.id,
-        type: "draft_brief",
-        status: "ready",
-        createdAt: now,
-      };
-
       await repository.createEpisode(episode);
-      await repository.createTask(task);
       await repository.createAuditEvent({
         id: crypto.randomUUID(),
         episodeId: episode.id,
         actorId: "system",
         type: "episode_created",
         from: null,
-        to: "brief_draft",
+        to: "waiting_input",
         reason: "Episode created from its fixed blueprint version.",
         createdAt: now,
       });
@@ -132,8 +135,47 @@ export function createPlatformService(repository: PlatformRepository): PlatformS
 
       return updatedEpisode;
     },
-    listEpisodes: () => repository.listEpisodes(),
+    async listEpisodes(filter) {
+      const episodes = await repository.listEpisodes();
+      return filter && "seriesVersionId" in filter
+        ? episodes.filter((episode) => episode.seriesVersionId === filter.seriesVersionId)
+        : episodes;
+    },
     listTasks: (episodeId) => repository.listTasks(episodeId),
     listAuditEvents: (episodeId) => repository.listAuditEvents(episodeId),
+    async importMaterial(input) {
+      const episode = await repository.getEpisode(input.episodeId);
+      if (!episode) throw new EpisodeNotFoundError(input.episodeId);
+      const content = input.content.slice();
+      const sha256 = await sha256Hex(content);
+      const sourceName = input.sourcePath.split(/[\\/]/).pop() || "material.bin";
+      const revision: ProductionMaterialRevision = {
+        id: crypto.randomUUID(),
+        episodeId: input.episodeId,
+        materialType: input.materialType,
+        sourceKind: input.sourceKind,
+        sourcePath: input.sourcePath,
+        storagePath: `episodes/${input.episodeId}/materials/${sha256}-${sourceName}`,
+        content,
+        mimeType: input.mimeType,
+        sha256,
+        fileSize: content.byteLength,
+        isMainScript: input.isMainScript,
+        createdAt: new Date().toISOString(),
+      };
+      await repository.createMaterialRevision(revision);
+      if (input.isMainScript && episode.status === "waiting_input") {
+        await repository.updateEpisode({ ...episode, status: "script_approved", updatedAt: revision.createdAt });
+      }
+      return { ...revision, content: revision.content.slice() };
+    },
+    listMaterialRevisions: (episodeId) => repository.listMaterialRevisions(episodeId),
+    async updateEpisodeTitle(episodeId, title) {
+      const episode = await repository.getEpisode(episodeId);
+      if (!episode) throw new EpisodeNotFoundError(episodeId);
+      const updatedEpisode = { ...episode, title, updatedAt: new Date().toISOString() };
+      await repository.updateEpisode(updatedEpisode);
+      return updatedEpisode;
+    },
   };
 }

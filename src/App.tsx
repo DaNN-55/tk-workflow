@@ -14,6 +14,9 @@ type Theme = "light" | "dark";
 type Account = Database["public"]["Tables"]["accounts"]["Row"];
 type Blueprint = Database["public"]["Tables"]["account_blueprint_versions"]["Row"];
 type Episode = Database["public"]["Tables"]["episodes"]["Row"];
+type Series = Database["public"]["Tables"]["series"]["Row"];
+type SeriesVersion = Database["public"]["Tables"]["series_versions"]["Row"];
+type MaterialRevision = Database["public"]["Tables"]["production_material_revisions"]["Row"];
 type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
 type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
@@ -32,10 +35,23 @@ interface WorkerBlocker {
   detail: string;
 }
 
+interface MaterialImportRequest {
+  episodeId: string;
+  sourceKind: "directory" | "file" | "paste";
+  sourcePath: string;
+  content?: Uint8Array;
+  materialType: string;
+  mimeType: string;
+  isMainScript: boolean;
+}
+
 interface Workspace {
   accounts: Account[];
   blueprints: Blueprint[];
   episodes: Episode[];
+  series: Series[];
+  seriesVersions: SeriesVersion[];
+  materialRevisions: MaterialRevision[];
   artifacts: Artifact[];
   tasks: Task[];
   transitions: Transition[];
@@ -54,22 +70,23 @@ const navigation: Array<{ id: NavigationItem; label: string }> = [
 ];
 
 const stageLabels: Record<EpisodeStage, string> = {
-  brief_draft: "需求草稿",
-  script_draft: "脚本草稿",
-  script_review: "脚本审核",
-  script_approved: "脚本已通过",
-  visual_draft: "视觉草稿",
-  visual_review: "视觉审核",
-  visual_approved: "视觉已通过",
-  storyboard_draft: "分镜草稿",
-  storyboard_review: "分镜审核",
-  storyboard_approved: "分镜已通过",
-  production_ready: "制作中",
-  render_ready: "待渲染",
-  qc_review: "质检审核",
-  qc_passed: "质检通过",
-  publish_ready: "待发布",
-  publishing_review: "发布审核",
+  waiting_input: "等待输入",
+  brief_draft: "等待输入",
+  script_draft: "脚本生成与审核",
+  script_review: "脚本生成与审核",
+  script_approved: "分镜前准备与审核",
+  visual_draft: "分镜前准备与审核",
+  visual_review: "分镜前准备与审核",
+  visual_approved: "分镜前准备与审核",
+  storyboard_draft: "分镜生成与审核",
+  storyboard_review: "分镜生成与审核",
+  storyboard_approved: "分镜生成与审核",
+  production_ready: "媒体生产与预渲染审核",
+  render_ready: "媒体生产与预渲染审核",
+  qc_review: "合成与 QC 审核",
+  qc_passed: "合成与 QC 审核",
+  publish_ready: "发布准备",
+  publishing_review: "发布准备",
   published: "已发布",
   metrics_collecting: "收集指标",
   learning_recorded: "已记录复盘",
@@ -144,11 +161,22 @@ function artifactPreviewKind(relativePath: string): "image" | "video" | null {
   return null;
 }
 
+function bytesToBase64(content: Uint8Array): string {
+  let binary = "";
+  for (let offset = 0; offset < content.length; offset += 0x8000) {
+    binary += String.fromCharCode(...content.subarray(offset, offset + 0x8000));
+  }
+  return btoa(binary);
+}
+
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
+    supabase.from("series").select("*").order("name"),
+    supabase.from("series_versions").select("*").order("version", { ascending: false }),
+    supabase.from("production_material_revisions").select("*").order("created_at", { ascending: false }),
     supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
     supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
@@ -157,7 +185,7 @@ async function loadWorkspace(): Promise<Workspace> {
     supabase.from("metric_snapshots").select("*").order("captured_at", { ascending: false }),
     supabase.from("blueprint_change_suggestions").select("*").order("created_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -167,6 +195,9 @@ async function loadWorkspace(): Promise<Workspace> {
     accounts: accountsResult.data ?? [],
     blueprints: blueprintsResult.data ?? [],
     episodes: episodesResult.data ?? [],
+    series: seriesResult.data ?? [],
+    seriesVersions: seriesVersionsResult.data ?? [],
+    materialRevisions: materialRevisionsResult.data ?? [],
     artifacts: artifactsResult.data ?? [],
     tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
@@ -185,6 +216,7 @@ export function App() {
   const [selectedAccountId, setSelectedAccountId] = useState("");
   const [selectedEpisodeId, setSelectedEpisodeId] = useState("");
   const [accountFilter, setAccountFilter] = useState("全部账号");
+  const [seriesFilter, setSeriesFilter] = useState("全部系列");
   const [showAccountForm, setShowAccountForm] = useState(false);
   const [showEpisodeForm, setShowEpisodeForm] = useState(false);
   const [showPasswordForm, setShowPasswordForm] = useState(false);
@@ -235,11 +267,20 @@ export function App() {
 
   const accountsById = useMemo(() => new Map(workspace?.accounts.map((account) => [account.id, account])), [workspace]);
   const blueprintsById = useMemo(() => new Map(workspace?.blueprints.map((blueprint) => [blueprint.id, blueprint])), [workspace]);
+  const seriesById = useMemo(() => new Map(workspace?.series.map((series) => [series.id, series])), [workspace]);
+  const seriesVersionsById = useMemo(() => new Map(workspace?.seriesVersions.map((version) => [version.id, version])), [workspace]);
   const selectedAccount = workspace?.accounts.find((account) => account.id === selectedAccountId) ?? null;
   const selectedEpisode = workspace?.episodes.find((episode) => episode.id === selectedEpisodeId) ?? null;
-  const visibleEpisodes = useMemo(
+  const accountVisibleEpisodes = useMemo(
     () => (workspace?.episodes ?? []).filter((episode) => accountFilter === "全部账号" || episode.account_id === accountFilter),
     [accountFilter, workspace],
+  );
+  const visibleEpisodes = useMemo(
+    () => accountVisibleEpisodes.filter((episode) => {
+      if (seriesFilter === "全部系列") return true;
+      return episode.series_version_id ? seriesVersionsById.get(episode.series_version_id)?.series_id === seriesFilter : false;
+    }),
+    [accountVisibleEpisodes, seriesFilter, seriesVersionsById],
   );
 
   function changeTheme() {
@@ -279,6 +320,28 @@ export function App() {
       await refreshWorkspace();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "创建蓝图版本失败。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function createSeries(input: { name: string; rules: Json }) {
+    if (!selectedAccount) return;
+    setPendingAction("series");
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("create_series", {
+        p_account_id: selectedAccount.id,
+        p_name: input.name,
+        p_rules: input.rules,
+      });
+      if (error) throw error;
+      setMessage("系列和 v1 规则已创建，可在新建生产单时关联。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "创建系列失败。";
+      setErrorMessage(message);
+      throw new Error(message);
     } finally {
       setPendingAction("");
     }
@@ -325,8 +388,8 @@ export function App() {
     }
   }
 
-  async function createEpisode(title: string, accountId: string) {
-    const account = workspace?.accounts.find((candidate) => candidate.id === accountId);
+  async function createEpisode(input: { title: string; accountId: string; seriesVersionId: string | null }) {
+    const account = workspace?.accounts.find((candidate) => candidate.id === input.accountId);
     if (!account?.current_blueprint_version_id) return;
     setPendingAction("episode");
     setErrorMessage("");
@@ -334,15 +397,61 @@ export function App() {
       const { data, error } = await supabase.rpc("create_episode", {
         p_account_id: account.id,
         p_blueprint_version_id: account.current_blueprint_version_id,
-        p_title: title,
+        p_series_version_id: input.seriesVersionId,
+        p_title: input.title,
       });
       if (error) throw error;
       setShowEpisodeForm(false);
-      setMessage("生产单已创建，并已生成首个 brief 任务。");
+      setMessage("生产单已创建，正在等待确认主脚本或其他输入。");
       if (data) setSelectedEpisodeId(data.id);
       await refreshWorkspace();
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "创建生产单失败。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function updateEpisodeTitle(episodeId: string, title: string) {
+    setPendingAction(`title-${episodeId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("update_episode_title", { p_episode_id: episodeId, p_title: title });
+      if (error) throw error;
+      setMessage("生产单标题已更新；已导入内容保持有效。");
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法更新生产单标题。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function importProductionMaterial(input: MaterialImportRequest) {
+    setPendingAction(`material-${input.episodeId}`);
+    setErrorMessage("");
+    try {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) throw error;
+      if (!data.session) throw new Error("需要 Owner 登录会话。");
+      const response = await fetch(`/_production-material?${new URLSearchParams({ episode: input.episodeId }).toString()}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${data.session.access_token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contentBase64: input.content ? bytesToBase64(input.content) : undefined,
+          isMainScript: input.isMainScript,
+          materialType: input.materialType,
+          mimeType: input.mimeType,
+          sourceKind: input.sourceKind,
+          sourcePath: input.sourcePath,
+        }),
+      });
+      if (!response.ok) throw new Error((await response.text()).trim() || "无法导入生产材料。");
+      setMessage(input.isMainScript ? "主脚本已确认为不可变修订，生产单已进入分镜前准备。" : "生产材料已导入为不可变修订。");
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法导入生产材料。");
+      throw error;
     } finally {
       setPendingAction("");
     }
@@ -354,7 +463,7 @@ export function App() {
     try {
       const { error } = await supabase.rpc("transition_episode", {
         p_episode_id: episodeId,
-        p_to_stage: toStage,
+        p_to_stage: toStage as Database["public"]["Enums"]["episode_stage"],
         p_reason: reason,
       });
       if (error) throw error;
@@ -541,7 +650,10 @@ export function App() {
             isPending={pendingAction}
             onActivate={activateBlueprint}
             onCreateBlueprint={createBlueprint}
+            onCreateSeries={createSeries}
             onSelectAccount={setSelectedAccountId}
+            series={workspace.series.filter((candidate) => candidate.account_id === selectedAccount?.id)}
+            seriesVersions={workspace.seriesVersions.filter((version) => version.account_id === selectedAccount?.id)}
           />
         ) : activeNavigation === "reviews" ? (
           <ReviewWorkspace
@@ -555,7 +667,7 @@ export function App() {
             accountsById={accountsById}
             artifacts={workspace.artifacts}
             tasks={workspace.tasks}
-            episodes={visibleEpisodes}
+            episodes={accountVisibleEpisodes}
             isPending={pendingAction}
             onSelectEpisode={setSelectedEpisodeId}
             onTransition={transitionEpisode}
@@ -565,7 +677,7 @@ export function App() {
           <LearningWorkspace
             accountsById={accountsById}
             blueprintVersionsById={blueprintsById}
-            episodes={visibleEpisodes}
+            episodes={accountVisibleEpisodes}
             experiments={workspace.experiments}
             learningReports={workspace.learningReports}
             metricSnapshots={workspace.metricSnapshots}
@@ -586,7 +698,12 @@ export function App() {
             episodes={visibleEpisodes}
             filter={accountFilter}
             onFilter={setAccountFilter}
+            onSeriesFilter={setSeriesFilter}
             onSelectEpisode={setSelectedEpisodeId}
+            series={workspace.series}
+            seriesById={seriesById}
+            seriesFilter={seriesFilter}
+            seriesVersionsById={seriesVersionsById}
             selectedEpisode={selectedEpisode}
           />
         )}
@@ -599,16 +716,21 @@ export function App() {
             blueprint={blueprintsById.get(selectedEpisode.blueprint_version_id) ?? null}
             episode={selectedEpisode}
             isDirectoryPending={pendingAction === `directory-${selectedEpisode.id}`}
+            isMaterialPending={pendingAction === `material-${selectedEpisode.id}`}
+            isTitlePending={pendingAction === `title-${selectedEpisode.id}`}
             isTransitionPending={pendingAction.startsWith(`transition-${selectedEpisode.id}-`)}
             onCreateLocalDirectory={createLocalEpisodeDirectory}
+            onImportMaterial={importProductionMaterial}
             onTransition={transitionEpisode}
+            onUpdateTitle={updateEpisodeTitle}
+            materialRevisions={workspace.materialRevisions}
             tasks={workspace.tasks}
             transitions={workspace.transitions}
           />
         ) : <EmptyDetail />}
       </aside>
 
-      {showEpisodeForm ? <EpisodeForm accounts={workspace.accounts} isPending={pendingAction === "episode"} onClose={() => setShowEpisodeForm(false)} onSubmit={createEpisode} /> : null}
+      {showEpisodeForm ? <EpisodeForm accounts={workspace.accounts} isPending={pendingAction === "episode"} onClose={() => setShowEpisodeForm(false)} onSubmit={createEpisode} series={workspace.series} seriesVersions={workspace.seriesVersions} /> : null}
       {showAccountForm ? <AccountForm isPending={pendingAction === "account"} onClose={() => setShowAccountForm(false)} onSubmit={createAccount} /> : null}
       {showPasswordForm ? <PasswordForm onClose={() => setShowPasswordForm(false)} onSubmit={async (password) => {
         setPendingAction("password");
@@ -686,7 +808,7 @@ function BootstrapScreen({ errorMessage, isPending, onSubmit }: { errorMessage: 
 function LoadingScreen() { return <main className="access-shell"><div className="loading-mark">正在连接受控平台…</div></main>; }
 function ErrorScreen({ errorMessage, onRetry }: { errorMessage: string; onRetry: () => Promise<void> }) { return <main className="access-shell"><section className="access-card"><h1>无法读取控制数据</h1><p className="form-error">{errorMessage}</p><button className="button button-primary" onClick={() => void onRetry()} type="button">重试</button></section></main>; }
 
-function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate, onCreateBlueprint, onSelectAccount }: { account: Account | null; accounts: Account[]; blueprints: Blueprint[]; isPending: string; onActivate: (id: string) => Promise<void>; onCreateBlueprint: (policy: Json) => Promise<void>; onSelectAccount: (id: string) => void }) {
+function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate, onCreateBlueprint, onCreateSeries, onSelectAccount, series, seriesVersions }: { account: Account | null; accounts: Account[]; blueprints: Blueprint[]; isPending: string; onActivate: (id: string) => Promise<void>; onCreateBlueprint: (policy: Json) => Promise<void>; onCreateSeries: (input: { name: string; rules: Json }) => Promise<void>; onSelectAccount: (id: string) => void; series: Series[]; seriesVersions: SeriesVersion[] }) {
   const [policy, setPolicy] = useState("");
   const [assetRoot, setAssetRoot] = useState("");
   const [formError, setFormError] = useState("");
@@ -721,12 +843,34 @@ function AccountWorkspace({ account, accounts, blueprints, isPending, onActivate
   }
 
   if (!account) return <div className="empty-state">没有可读取的账号。</div>;
-  return <><div className="account-selector"><label>当前账号<select onChange={(event) => onSelectAccount(event.target.value)} value={account.id}>{accounts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><p>{policyPositioning(activePolicy)}<br />资产目录：{policyAssetRoot(activePolicy)}</p></div><div className="account-layout"><section className="blueprint-list"><h2>蓝图版本</h2>{blueprints.map((blueprint) => <article className={`blueprint-card ${blueprint.is_active ? "is-active" : ""}`} key={blueprint.id}><div><strong>v{blueprint.version}</strong><span>{blueprint.is_active ? "当前生效" : "待激活"}</span></div><p>{policyPositioning(blueprint.policy)}<br />资产目录：{policyAssetRoot(blueprint.policy)}</p>{blueprint.is_active ? null : <button className="button button-secondary" disabled={isPending === `activate-${blueprint.id}`} onClick={() => void onActivate(blueprint.id)} type="button">激活此版本</button>}</article>)}</section><section className="blueprint-editor"><h2>资产目录与蓝图</h2><p>目录由运行 Worker 的本机验证。保存会创建新蓝图版本；激活后才用于之后新建的生产单，历史生产单不变。</p><label>资产目录<input aria-label="资产目录" onChange={(event) => setAssetRoot(event.target.value)} placeholder="例如：/Volumes/素材盘/tk-workflow/dao" value={assetRoot} /></label><p className="field-hint">可填写 macOS、Windows 或 Linux 的本机目录。浏览器不会读取这个目录。</p><label>蓝图规则（JSON）<textarea aria-label="新蓝图规则" onChange={(event) => updatePolicy(event.target.value)} rows={14} value={policy} /></label><button className="button button-primary" disabled={isPending === "blueprint"} onClick={createConfiguredBlueprint} type="button">{isPending === "blueprint" ? "创建中…" : "保存为新版本"}</button>{formError ? <p className="form-error">{formError}</p> : null}</section></div></>;
+  return <><div className="account-selector"><label>当前账号<select onChange={(event) => onSelectAccount(event.target.value)} value={account.id}>{accounts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><p>{policyPositioning(activePolicy)}<br />资产目录：{policyAssetRoot(activePolicy)}</p></div><div className="account-layout"><section className="blueprint-list"><h2>蓝图版本</h2>{blueprints.map((blueprint) => <article className={`blueprint-card ${blueprint.is_active ? "is-active" : ""}`} key={blueprint.id}><div><strong>v{blueprint.version}</strong><span>{blueprint.is_active ? "当前生效" : "待激活"}</span></div><p>{policyPositioning(blueprint.policy)}<br />资产目录：{policyAssetRoot(blueprint.policy)}</p>{blueprint.is_active ? null : <button className="button button-secondary" disabled={isPending === `activate-${blueprint.id}`} onClick={() => void onActivate(blueprint.id)} type="button">激活此版本</button>}</article>)}</section><section className="blueprint-editor"><h2>资产目录与蓝图</h2><p>目录由运行 Worker 的本机验证。保存会创建新蓝图版本；激活后才用于之后新建的生产单，历史生产单不变。</p><label>资产目录<input aria-label="资产目录" onChange={(event) => setAssetRoot(event.target.value)} placeholder="例如：/Volumes/素材盘/tk-workflow/dao" value={assetRoot} /></label><p className="field-hint">可填写 macOS、Windows 或 Linux 的本机目录。浏览器不会读取这个目录。</p><label>蓝图规则（JSON）<textarea aria-label="新蓝图规则" onChange={(event) => updatePolicy(event.target.value)} rows={14} value={policy} /></label><button className="button button-primary" disabled={isPending === "blueprint"} onClick={createConfiguredBlueprint} type="button">{isPending === "blueprint" ? "创建中…" : "保存为新版本"}</button>{formError ? <p className="form-error">{formError}</p> : null}</section></div><SeriesSettings isPending={isPending === "series"} onCreate={onCreateSeries} series={series} seriesVersions={seriesVersions} /></>;
 }
 
-function EpisodeWorkspace({ accounts, accountsById, artifacts, blueprintsById, currentNavigation, episodes, filter, onFilter, onSelectEpisode, selectedEpisode }: { accounts: Account[]; accountsById: Map<string, Account>; artifacts: Artifact[]; blueprintsById: Map<string, Blueprint>; currentNavigation: NavigationItem; episodes: Episode[]; filter: string; onFilter: (value: string) => void; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
+export function SeriesSettings({ isPending, onCreate, series, seriesVersions }: { isPending: boolean; onCreate: (input: { name: string; rules: Json }) => Promise<void>; series: Series[]; seriesVersions: SeriesVersion[] }) {
+  const [name, setName] = useState("");
+  const [rules, setRules] = useState("{}");
+  const [formError, setFormError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setFormError("");
+      const parsedRules = JSON.parse(rules) as Json;
+      if (!parsedRules || typeof parsedRules !== "object" || Array.isArray(parsedRules)) throw new Error("系列规则必须是 JSON 对象。");
+      await onCreate({ name: name.trim(), rules: parsedRules });
+      setName("");
+      setRules("{}");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "系列规则无法解析。");
+    }
+  }
+
+  return <section className="series-settings"><div><h2>系列</h2>{series.length ? <div className="series-list">{series.map((candidate) => { const versions = seriesVersions.filter((version) => version.series_id === candidate.id); return <article className="blueprint-card" key={candidate.id}><div><strong>{candidate.name}</strong><span>{versions.length} 个版本</span></div><p>{versions.length ? `最新规则 v${Math.max(...versions.map((version) => version.version))}` : "暂无规则版本"}</p></article>; })}</div> : <p>还没有系列。创建后即可在生产单中关联和筛选。</p>}</div><form onSubmit={(event) => void submit(event)}><h2>新建系列</h2><label>系列名称<input aria-label="系列名称" onChange={(event) => setName(event.target.value)} required value={name} /></label><label>系列规则（JSON）<textarea aria-label="系列规则" onChange={(event) => setRules(event.target.value)} rows={6} value={rules} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "创建中…" : "创建系列 v1"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form></section>;
+}
+
+function EpisodeWorkspace({ accounts, accountsById, artifacts, blueprintsById, currentNavigation, episodes, filter, onFilter, onSeriesFilter, onSelectEpisode, series, seriesById, seriesFilter, seriesVersionsById, selectedEpisode }: { accounts: Account[]; accountsById: Map<string, Account>; artifacts: Artifact[]; blueprintsById: Map<string, Blueprint>; currentNavigation: NavigationItem; episodes: Episode[]; filter: string; onFilter: (value: string) => void; onSeriesFilter: (value: string) => void; onSelectEpisode: (id: string) => void; series: Series[]; seriesById: Map<string, Series>; seriesFilter: string; seriesVersionsById: Map<string, SeriesVersion>; selectedEpisode: Episode | null }) {
   if (currentNavigation !== "episodes") return <div className="empty-state"><h2>复盘记录</h2><p>该模块将在后续学习闭环任务中接入。当前所有状态与审计均来自真实数据库。</p></div>;
-  return <><div className="filters"><label><span>账号</span><select onChange={(event) => onFilter(event.target.value)} value={filter}><option value="全部账号">全部账号</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><span className="summary-count">{episodes.length} 个生产单</span></div><div className="episode-table" role="table" aria-label="生产单"><div className="table-row table-header" role="row"><span>生产单</span><span>账号</span><span>蓝图</span><span>当前阶段</span><span>产物数</span><span>更新时间</span></div>{episodes.map((episode) => <button className={`table-row episode-row ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id} onClick={() => onSelectEpisode(episode.id)} role="row" type="button"><span className="episode-name"><strong>{episode.title}</strong><small>{episode.id.slice(0, 8)}</small></span><span className="account-name"><i>{accountsById.get(episode.account_id)?.slug.slice(0, 2).toUpperCase()}</i>{accountsById.get(episode.account_id)?.name}</span><span>v{blueprintsById.get(episode.blueprint_version_id)?.version ?? "—"}</span><span className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</span><span>{artifacts.filter((artifact) => artifact.episode_id === episode.id).length}</span><span>{formatDate(episode.updated_at)}</span></button>)}</div>{episodes.length === 0 ? <div className="empty-state compact"><h2>还没有生产单</h2><p>请点击右上角“新建生产单”。每个生产单都会固定使用当前激活蓝图。</p></div> : null}<div className="status-legend"><span><i className="legend-approved" />已通过</span><span><i className="legend-review" />待审核</span><span><i className="legend-muted" />草稿 / 制作</span></div></>;
+  return <><div className="filters"><label><span>账号</span><select onChange={(event) => onFilter(event.target.value)} value={filter}><option value="全部账号">全部账号</option>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label><span>系列</span><select onChange={(event) => onSeriesFilter(event.target.value)} value={seriesFilter}><option value="全部系列">全部系列</option>{series.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name}</option>)}</select></label><span className="summary-count">{episodes.length} 个生产单</span></div><div className="episode-table" role="table" aria-label="生产单"><div className="table-row table-header" role="row"><span>生产单</span><span>账号</span><span>系列</span><span>蓝图</span><span>当前阶段</span><span>产物数</span><span>更新时间</span></div>{episodes.map((episode) => { const seriesVersion = episode.series_version_id ? seriesVersionsById.get(episode.series_version_id) : null; return <button className={`table-row episode-row ${selectedEpisode?.id === episode.id ? "is-selected" : ""}`} key={episode.id} onClick={() => onSelectEpisode(episode.id)} role="row" type="button"><span className="episode-name"><strong>{episode.title || "未命名生产单"}</strong><small>{episode.id.slice(0, 8)}</small></span><span className="account-name"><i>{accountsById.get(episode.account_id)?.slug.slice(0, 2).toUpperCase()}</i>{accountsById.get(episode.account_id)?.name}</span><span>{seriesVersion ? `${seriesById.get(seriesVersion.series_id)?.name ?? "未知系列"} v${seriesVersion.version}` : "—"}</span><span>v{blueprintsById.get(episode.blueprint_version_id)?.version ?? "—"}</span><span className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</span><span>{artifacts.filter((artifact) => artifact.episode_id === episode.id).length}</span><span>{formatDate(episode.updated_at)}</span></button>; })}</div>{episodes.length === 0 ? <div className="empty-state compact"><h2>还没有符合条件的生产单</h2><p>调整筛选条件，或点击右上角“新建生产单”。</p></div> : null}<div className="status-legend"><span><i className="legend-approved" />已通过</span><span><i className="legend-review" />待审核</span><span><i className="legend-muted" />草稿 / 制作</span></div></>;
 }
 
 export function ReviewWorkspace({ accountsById, episodes, onSelectEpisode, selectedEpisode }: { accountsById: Map<string, Account>; episodes: Episode[]; onSelectEpisode: (id: string) => void; selectedEpisode: Episode | null }) {
@@ -758,8 +902,9 @@ function PublicationConfirmationForm({ episode, isPending, onConfirm }: { episod
   return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => setReason(event.target.value)} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
-export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isTransitionPending, onCreateLocalDirectory, onTransition, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isTransitionPending: boolean; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; tasks: Task[]; transitions: Transition[] }) {
+export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onImportMaterial, onTransition, onUpdateTitle, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<void>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; tasks: Task[]; transitions: Transition[] }) {
   const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
+  const episodeMaterials = materialRevisions.filter((revision) => revision.episode_id === episode.id);
   const history = transitions.filter((transition) => transition.episode_id === episode.id);
   const blockers = workerBlockers(tasks, episode.id);
   const reviewAction = reviewActionFor(episode.stage);
@@ -774,7 +919,70 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     }
   }
 
-  return <><header className="review-heading"><div><h2>{episode.title}</h2><span>{episode.id.slice(0, 8)}</span></div></header><p className="review-meta">蓝图 v{blueprint?.version ?? "—"} · 创建于 {formatDate(episode.created_at)}</p><section className="review-section episode-local-directory"><h3>本地 Episode 目录</h3><label>完整 Episode ID<input aria-label="完整 Episode ID" readOnly value={episode.id} /></label><div className="review-actions"><button className="button button-secondary" onClick={() => void copyEpisodeId()} type="button">复制 Episode ID</button><button className="button button-secondary" disabled={isDirectoryPending} onClick={() => void onCreateLocalDirectory(episode.id)} type="button">{isDirectoryPending ? "创建中…" : "创建本地目录"}</button></div>{directoryMessage ? <p className="muted-copy">{directoryMessage}</p> : null}</section><div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div><ArtifactPreview artifacts={episodeArtifacts} /><section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无产物。首个 brief 任务已创建，等待 Worker 接入。</p>}</section>{blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}{reviewAction ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} reviewAction={reviewAction} /> : null}<section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section></>;
+  return <>
+    <header className="review-heading"><div><h2>{episode.title || "未命名生产单"}</h2><span>{episode.id.slice(0, 8)}</span></div></header>
+    <p className="review-meta">蓝图 v{blueprint?.version ?? "—"} · 创建于 {formatDate(episode.created_at)}</p>
+    <EpisodeTitleForm episode={episode} isPending={isTitlePending} onSave={onUpdateTitle} />
+    <section className="review-section episode-local-directory"><h3>项目输入目录</h3><label>完整 Episode ID<input aria-label="完整 Episode ID" readOnly value={episode.id} /></label><p className="muted-copy">目录文件放入 <code>episodes/{episode.id}/input</code>，再在下方显式确认导入。</p><div className="review-actions"><button className="button button-secondary" onClick={() => void copyEpisodeId()} type="button">复制 Episode ID</button><button className="button button-secondary" disabled={isDirectoryPending} onClick={() => void onCreateLocalDirectory(episode.id)} type="button">{isDirectoryPending ? "创建中…" : "创建本地目录"}</button></div>{directoryMessage ? <p className="muted-copy">{directoryMessage}</p> : null}</section>
+    <MaterialImportForm episodeId={episode.id} isPending={isMaterialPending} onImport={onImportMaterial} />
+    <section className="review-section"><h3>生产材料修订</h3>{episodeMaterials.length ? episodeMaterials.map((revision) => <div className="material-revision" key={revision.id}><strong>{revision.is_main_script ? "主脚本" : revision.material_type} · v{revision.revision_number}</strong><span>{revision.source_kind} · {revision.source_path}</span><code>{revision.sha256.slice(0, 12)}… · {revision.storage_path}</code></div>) : <p className="muted-copy">还没有导入材料修订。</p>}</section>
+    <div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div>
+    <ArtifactPreview artifacts={episodeArtifacts} />
+    <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
+    {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
+    {reviewAction ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} reviewAction={reviewAction} /> : null}
+    <section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section>
+  </>;
+}
+
+function EpisodeTitleForm({ episode, isPending, onSave }: { episode: Episode; isPending: boolean; onSave: (episodeId: string, title: string) => Promise<void> }) {
+  const [title, setTitle] = useState(episode.title);
+  useEffect(() => setTitle(episode.title), [episode.id, episode.title]);
+  return <form className="episode-title-form" onSubmit={(event) => { event.preventDefault(); void onSave(episode.id, title); }}><label>工作标题（可留空）<input aria-label="工作标题" onChange={(event) => setTitle(event.target.value)} placeholder="可在后续审核前补充" value={title} /></label><button className="button button-secondary" disabled={isPending || title === episode.title} type="submit">{isPending ? "保存中…" : "保存标题"}</button></form>;
+}
+
+function MaterialImportForm({ episodeId, isPending, onImport }: { episodeId: string; isPending: boolean; onImport: (input: MaterialImportRequest) => Promise<void> }) {
+  const [sourceKind, setSourceKind] = useState<MaterialImportRequest["sourceKind"]>("directory");
+  const [sourcePath, setSourcePath] = useState("");
+  const [pastedContent, setPastedContent] = useState("");
+  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [materialType, setMaterialType] = useState("script");
+  const [isMainScript, setIsMainScript] = useState(true);
+  const [confirmed, setConfirmed] = useState(false);
+  const [formError, setFormError] = useState("");
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    try {
+      setFormError("");
+      if (isMainScript && !confirmed) throw new Error("请明确确认这份材料是主脚本。");
+      let content: Uint8Array | undefined;
+      let resolvedPath = sourcePath.trim();
+      let mimeType = "application/octet-stream";
+      if (sourceKind === "file") {
+        if (!selectedFile) throw new Error("请选择要导入的文件。");
+        resolvedPath = selectedFile.name;
+        content = new Uint8Array(await selectedFile.arrayBuffer());
+        mimeType = selectedFile.type || mimeType;
+      } else if (sourceKind === "paste") {
+        if (!pastedContent) throw new Error("请粘贴要导入的内容。");
+        resolvedPath = resolvedPath || "pasted-script.txt";
+        content = new TextEncoder().encode(pastedContent);
+        mimeType = "text/plain;charset=utf-8";
+      } else if (!resolvedPath) {
+        throw new Error("请填写项目输入目录内的相对文件路径。");
+      }
+      await onImport({ content, episodeId, isMainScript, materialType, mimeType, sourceKind, sourcePath: resolvedPath });
+      setConfirmed(false);
+      setPastedContent("");
+      setSelectedFile(null);
+      setSourcePath("");
+    } catch (error) {
+      setFormError(error instanceof Error ? error.message : "无法导入生产材料。");
+    }
+  }
+
+  return <form className="review-section material-import" onSubmit={submit}><h3>导入生产材料</h3><label>来源<select aria-label="材料来源" onChange={(event) => setSourceKind(event.target.value as MaterialImportRequest["sourceKind"])} value={sourceKind}><option value="directory">项目输入目录</option><option value="file">文件选择</option><option value="paste">粘贴内容</option></select></label><label>材料类型<select aria-label="材料类型" onChange={(event) => { const nextType = event.target.value; setMaterialType(nextType); if (nextType !== "script") setIsMainScript(false); }} value={materialType}><option value="script">脚本</option><option value="reference">参考材料</option><option value="image">图片</option><option value="audio">音频</option><option value="video">视频</option></select></label>{sourceKind === "file" ? <label>选择文件<input aria-label="选择生产材料文件" onChange={(event) => setSelectedFile(event.target.files?.[0] ?? null)} type="file" /></label> : sourceKind === "paste" ? <><label>来源名称<input aria-label="粘贴内容来源名称" onChange={(event) => setSourcePath(event.target.value)} placeholder="pasted-script.txt" value={sourcePath} /></label><label>粘贴内容<textarea aria-label="粘贴的生产材料" onChange={(event) => setPastedContent(event.target.value)} rows={7} value={pastedContent} /></label></> : <label>输入目录内路径<input aria-label="输入目录文件路径" onChange={(event) => setSourcePath(event.target.value)} placeholder="script.md" value={sourcePath} /></label>}<label className="checkbox-label"><input checked={isMainScript} disabled={materialType !== "script"} onChange={(event) => setIsMainScript(event.target.checked)} type="checkbox" />将此修订设为主脚本</label>{isMainScript ? <label className="checkbox-label confirmation"><input checked={confirmed} onChange={(event) => setConfirmed(event.target.checked)} type="checkbox" />我已检查内容，明确确认这是本生产单的主脚本。</label> : null}<button className="button button-primary" disabled={isPending} type="submit">{isPending ? "导入中…" : "确认并固定修订"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
 function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {
@@ -895,10 +1103,13 @@ function ReviewActions({ episode, isPending, onTransition, reviewAction }: { epi
 function EmptyDetail() { return <div className="empty-detail"><h2>选择一个生产单</h2><p>右侧会显示真实产物索引、固定蓝图版本与审计记录。</p></div>; }
 function Artifact({ complete = false, label, name }: { complete?: boolean; label: string; name: string }) { return <div className="artifact-row"><i className={complete ? "artifact-complete" : "artifact-pending"}>{complete ? "✓" : ""}</i><span>{label}</span><small>{name}</small></div>; }
 
-function EpisodeForm({ accounts, isPending, onClose, onSubmit }: { accounts: Account[]; isPending: boolean; onClose: () => void; onSubmit: (title: string, accountId: string) => Promise<void> }) {
+function EpisodeForm({ accounts, isPending, onClose, onSubmit, series, seriesVersions }: { accounts: Account[]; isPending: boolean; onClose: () => void; onSubmit: (input: { title: string; accountId: string; seriesVersionId: string | null }) => Promise<void>; series: Series[]; seriesVersions: SeriesVersion[] }) {
   const [title, setTitle] = useState("");
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? "");
-  return <div className="modal-backdrop" role="presentation"><form aria-label="新建生产单" className="modal-card" onSubmit={(event) => { event.preventDefault(); void onSubmit(title, accountId); }}><header><div><h2>新建生产单</h2><p>会固定采用所选账号当前激活的蓝图。</p></div><button aria-label="关闭新建生产单" className="icon-button" onClick={onClose} type="button"><Icon name="Close" /></button></header><label>账号<select onChange={(event) => setAccountId(event.target.value)} value={accountId}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label>生产单标题<input autoFocus onChange={(event) => setTitle(event.target.value)} placeholder="例如：越南民间信仰中的符号" required value={title} /></label><div className="modal-actions"><button className="button button-secondary" onClick={onClose} type="button">取消</button><button className="button button-primary" disabled={isPending} type="submit">{isPending ? "创建中…" : "创建生产单"}</button></div></form></div>;
+  const [seriesVersionId, setSeriesVersionId] = useState("");
+  const seriesById = new Map(series.map((candidate) => [candidate.id, candidate]));
+  const availableVersions = seriesVersions.filter((version) => version.account_id === accountId);
+  return <div className="modal-backdrop" role="presentation"><form aria-label="新建生产单" className="modal-card" onSubmit={(event) => { event.preventDefault(); void onSubmit({ accountId, seriesVersionId: seriesVersionId || null, title }); }}><header><div><h2>新建生产单</h2><p>会固定所选账号当前激活蓝图和可选系列版本。</p></div><button aria-label="关闭新建生产单" className="icon-button" onClick={onClose} type="button"><Icon name="Close" /></button></header><label>账号<select onChange={(event) => { setAccountId(event.target.value); setSeriesVersionId(""); }} value={accountId}>{accounts.map((account) => <option key={account.id} value={account.id}>{account.name}</option>)}</select></label><label>系列版本（可选）<select aria-label="系列版本" onChange={(event) => setSeriesVersionId(event.target.value)} value={seriesVersionId}><option value="">不关联系列</option>{availableVersions.map((version) => <option key={version.id} value={version.id}>{seriesById.get(version.series_id)?.name ?? "未知系列"} · v{version.version}</option>)}</select></label><label>工作标题（可留空）<input autoFocus onChange={(event) => setTitle(event.target.value)} placeholder="可在首次适用审核前补充" value={title} /></label><p className="form-hint">标题只是管理元数据，后续修改不会使已导入内容失效。</p><div className="modal-actions"><button className="button button-secondary" onClick={onClose} type="button">取消</button><button className="button button-primary" disabled={isPending || !accountId} type="submit">{isPending ? "创建中…" : "创建生产单"}</button></div></form></div>;
 }
 
 function AccountForm({ isPending, onClose, onSubmit }: { isPending: boolean; onClose: () => void; onSubmit: (input: { name: string; slug: string; timezone: string; policy: Json }) => Promise<void> }) {

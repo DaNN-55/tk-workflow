@@ -1,10 +1,11 @@
 import type { PlatformRepository } from "./repository";
-import type { AuditEvent, Episode, Task } from "./types";
+import type { AuditEvent, Episode, ProductionMaterialRevision, Task } from "./types";
 
 export function createInMemoryPlatformRepository(): PlatformRepository {
   const episodes = new Map<string, Episode>();
   const tasks = new Map<string, Task[]>();
   const auditEvents = new Map<string, AuditEvent[]>();
+  const materialRevisions = new Map<string, ProductionMaterialRevision[]>();
 
   return {
     async createEpisode(episode) {
@@ -34,6 +35,14 @@ export function createInMemoryPlatformRepository(): PlatformRepository {
     },
     async listAuditEvents(episodeId) {
       return auditEvents.get(episodeId) ?? [];
+    },
+    async createMaterialRevision(revision) {
+      const revisions = materialRevisions.get(revision.episodeId) ?? [];
+      revisions.push({ ...revision, content: revision.content.slice() });
+      materialRevisions.set(revision.episodeId, revisions);
+    },
+    async listMaterialRevisions(episodeId) {
+      return (materialRevisions.get(episodeId) ?? []).map((revision) => ({ ...revision, content: revision.content.slice() }));
     },
   };
 }

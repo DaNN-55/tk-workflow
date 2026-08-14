@@ -1,4 +1,5 @@
 export const episodeStages = [
+  "waiting_input",
   "brief_draft",
   "script_draft",
   "script_review",
@@ -33,6 +34,7 @@ export interface Episode {
   id: string;
   accountId: string;
   blueprintVersionId: string;
+  seriesVersionId: string | null;
   title: string;
   status: EpisodeStage;
   createdAt: string;
@@ -64,6 +66,7 @@ export interface AuditEvent {
 export interface CreateEpisodeInput {
   accountId: string;
   blueprintVersionId: string;
+  seriesVersionId?: string | null;
   title: string;
 }
 
@@ -72,4 +75,31 @@ export interface TransitionEpisodeInput {
   actor: Actor;
   to: EpisodeStage;
   reason: string;
+}
+
+export type MaterialSourceKind = "directory" | "file" | "paste";
+
+export interface ProductionMaterialRevision {
+  id: string;
+  episodeId: string;
+  materialType: string;
+  sourceKind: MaterialSourceKind;
+  sourcePath: string;
+  storagePath: string;
+  content: Uint8Array;
+  mimeType: string;
+  sha256: string;
+  fileSize: number;
+  isMainScript: boolean;
+  createdAt: string;
+}
+
+export interface ImportMaterialInput {
+  episodeId: string;
+  materialType: string;
+  sourceKind: MaterialSourceKind;
+  sourcePath: string;
+  content: Uint8Array;
+  mimeType: string;
+  isMainScript: boolean;
 }
