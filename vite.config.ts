@@ -2,11 +2,12 @@ import { defineConfig } from "vitest/config";
 import react from "@vitejs/plugin-react";
 import { createClient } from "@supabase/supabase-js";
 import { createReadStream, promises as fs } from "node:fs";
-import { extname, isAbsolute, relative } from "node:path";
+import { extname, isAbsolute, parse, relative, resolve } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { loadEnv, type Plugin } from "vite";
 
 const localArtifactRoute = "/_local-artifact";
+const localEpisodeDirectoryRoute = "/_local-episode-directory";
 
 const mediaTypes: Record<string, string> = {
   ".avif": "image/avif",
@@ -22,6 +23,20 @@ const mediaTypes: Record<string, string> = {
 
 function isSafeRelativeArtifactPath(value: string): boolean {
   return value.length > 0 && !value.split(/[\\/]/).some((segment) => !segment || segment === "." || segment === "..");
+}
+
+function isEpisodeId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+}
+
+function isDescendant(parentPath: string, childPath: string): boolean {
+  const pathFromParent = relative(parentPath, childPath);
+  return pathFromParent.length > 0 && !pathFromParent.startsWith("..") && !isAbsolute(pathFromParent);
+}
+
+function isFilesystemRoot(path: string): boolean {
+  const resolvedPath = resolve(path);
+  return parse(resolvedPath).root === resolvedPath;
 }
 
 function serveLocalArtifact(supabaseUrl: string | undefined, supabasePublishableKey: string | undefined) {
@@ -56,8 +71,7 @@ function serveLocalArtifact(supabaseUrl: string | undefined, supabasePublishable
     }
     const resolvedRoot = await fs.realpath(assetRoot);
     const resolvedArtifact = await fs.realpath(`${assetRoot}/${relativePath}`);
-    const rootRelativePath = relative(resolvedRoot, resolvedArtifact);
-    if (!rootRelativePath || rootRelativePath.startsWith("..") || isAbsolute(rootRelativePath)) {
+    if (!isDescendant(resolvedRoot, resolvedArtifact)) {
       response.statusCode = 403;
       response.end("产物路径超出账号资产目录。");
       return;
@@ -85,6 +99,72 @@ function serveLocalArtifact(supabaseUrl: string | undefined, supabasePublishable
   };
 }
 
+export function serveLocalEpisodeDirectory(supabaseUrl: string | undefined, supabasePublishableKey: string | undefined) {
+  return async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
+    if (request.method !== "POST") {
+      response.statusCode = 405;
+      response.end();
+      return;
+    }
+
+    const url = new URL(request.url ?? "", "http://127.0.0.1");
+    const episodeId = url.searchParams.get("episode") ?? "";
+    const authorization = request.headers.authorization;
+    if (!authorization?.startsWith("Bearer ")) {
+      response.statusCode = 401;
+      response.end("需要 Owner 登录会话。");
+      return;
+    }
+    if (!isEpisodeId(episodeId)) {
+      response.statusCode = 400;
+      response.end("无效的 Episode ID。");
+      return;
+    }
+
+    try {
+      const assetRoot = await assetRootForOwnedEpisode({ authorization, episodeId, supabasePublishableKey, supabaseUrl });
+      if (!assetRoot || !isAbsolute(assetRoot)) {
+        response.statusCode = 404;
+        response.end("未找到可创建目录的 Episode 资产根。");
+        return;
+      }
+
+      await createLocalEpisodeDirectory(assetRoot, episodeId);
+
+      response.statusCode = 201;
+      response.end("本地 Episode 目录已准备就绪。");
+    } catch {
+      response.statusCode = 403;
+      response.end("无法创建本地 Episode 目录。");
+    }
+  };
+}
+
+async function ensureDirectoryWithinRoot(root: string, directory: string): Promise<string> {
+  if (!isDescendant(root, directory)) throw new Error("目录超出资产根。");
+  try {
+    const existing = await fs.lstat(directory);
+    if (existing.isSymbolicLink() || !existing.isDirectory()) throw new Error("目录不是安全目录。");
+  } catch (error) {
+    if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
+    try {
+      await fs.mkdir(directory);
+    } catch (mkdirError) {
+      if (!(mkdirError instanceof Error && "code" in mkdirError && mkdirError.code === "EEXIST")) throw mkdirError;
+    }
+  }
+  const resolvedDirectory = await fs.realpath(directory);
+  if (!isDescendant(root, resolvedDirectory)) throw new Error("目录超出资产根。");
+  return resolvedDirectory;
+}
+
+export async function createLocalEpisodeDirectory(assetRoot: string, episodeId: string): Promise<string> {
+  const resolvedRoot = await fs.realpath(assetRoot);
+  if (isFilesystemRoot(resolvedRoot)) throw new Error("资产根不能是文件系统根目录。");
+  const resolvedEpisodesDirectory = await ensureDirectoryWithinRoot(resolvedRoot, resolve(resolvedRoot, "episodes"));
+  return ensureDirectoryWithinRoot(resolvedEpisodesDirectory, resolve(resolvedEpisodesDirectory, episodeId));
+}
+
 async function assetRootForIndexedArtifact(input: { authorization: string; episodeId: string; relativePath: string; supabasePublishableKey: string | undefined; supabaseUrl: string | undefined }): Promise<string | null> {
   if (!input.supabaseUrl || !input.supabasePublishableKey) return null;
   const supabase = createClient(input.supabaseUrl, input.supabasePublishableKey, { auth: { persistSession: false }, global: { headers: { Authorization: input.authorization } } });
@@ -101,15 +181,37 @@ async function assetRootForIndexedArtifact(input: { authorization: string; episo
   return typeof assetRoot === "string" ? assetRoot.trim() || null : null;
 }
 
+async function assetRootForOwnedEpisode(input: { authorization: string; episodeId: string; supabasePublishableKey: string | undefined; supabaseUrl: string | undefined }): Promise<string | null> {
+  if (!input.supabaseUrl || !input.supabasePublishableKey) return null;
+  const accessToken = input.authorization.slice("Bearer ".length);
+  const supabase = createClient(input.supabaseUrl, input.supabasePublishableKey, { auth: { persistSession: false }, global: { headers: { Authorization: input.authorization } } });
+  const { data: userData, error: userError } = await supabase.auth.getUser(accessToken);
+  if (userError || !userData.user) return null;
+
+  const { data: episode, error: episodeError } = await supabase.from("episodes").select("account_id, blueprint_version_id").eq("id", input.episodeId).maybeSingle();
+  if (episodeError || !episode) return null;
+
+  const { data: membership, error: membershipError } = await supabase.from("account_memberships").select("role").eq("account_id", episode.account_id).eq("user_id", userData.user.id).eq("role", "owner").maybeSingle();
+  if (membershipError || !membership) return null;
+
+  const { data: blueprint, error: blueprintError } = await supabase.from("account_blueprint_versions").select("policy").eq("id", episode.blueprint_version_id).maybeSingle();
+  if (blueprintError || !blueprint || !blueprint.policy || Array.isArray(blueprint.policy) || typeof blueprint.policy !== "object") return null;
+  const assetRoot = blueprint.policy.asset_root;
+  return typeof assetRoot === "string" ? assetRoot.trim() || null : null;
+}
+
 function localArtifactPreviewPlugin(supabaseUrl: string | undefined, supabasePublishableKey: string | undefined): Plugin {
-  const middleware = serveLocalArtifact(supabaseUrl, supabasePublishableKey);
+  const artifactMiddleware = serveLocalArtifact(supabaseUrl, supabasePublishableKey);
+  const directoryMiddleware = serveLocalEpisodeDirectory(supabaseUrl, supabasePublishableKey);
   return {
     name: "local-artifact-preview",
     configureServer(server) {
-      server.middlewares.use(localArtifactRoute, middleware);
+      server.middlewares.use(localArtifactRoute, artifactMiddleware);
+      server.middlewares.use(localEpisodeDirectoryRoute, directoryMiddleware);
     },
     configurePreviewServer(server) {
-      server.middlewares.use(localArtifactRoute, middleware);
+      server.middlewares.use(localArtifactRoute, artifactMiddleware);
+      server.middlewares.use(localEpisodeDirectoryRoute, directoryMiddleware);
     },
   };
 }

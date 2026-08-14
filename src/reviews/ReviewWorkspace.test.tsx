@@ -17,6 +17,7 @@ type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
 type Blueprint = Database["public"]["Tables"]["account_blueprint_versions"]["Row"];
 type Episode = Database["public"]["Tables"]["episodes"]["Row"];
 type Task = Database["public"]["Tables"]["tasks"]["Row"];
+const originalClipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
 
 const account: Account = {
   created_at: "2026-08-14T00:00:00.000Z",
@@ -95,6 +96,8 @@ describe("审核台", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    if (originalClipboard) Object.defineProperty(navigator, "clipboard", originalClipboard);
+    else delete (navigator as { clipboard?: Clipboard }).clipboard;
   });
 
   it("只列出需要 Owner 审核的 Episode，并允许选择其中一项", async () => {
@@ -115,7 +118,8 @@ describe("审核台", () => {
     const user = userEvent.setup();
     const onTransition = vi.fn().mockResolvedValue(undefined);
 
-    const { rerender } = render(<EpisodeDetail artifacts={[previewArtifact, videoArtifact]} blueprint={blueprint} episode={reviewEpisode} isTransitionPending={false} onTransition={onTransition} tasks={[blockedTask]} transitions={[]} />);
+    const onCreateLocalDirectory = vi.fn().mockResolvedValue(undefined);
+    const { rerender } = render(<EpisodeDetail artifacts={[previewArtifact, videoArtifact]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={onCreateLocalDirectory} onTransition={onTransition} tasks={[blockedTask]} transitions={[]} />);
 
     expect((await screen.findByAltText("cover 产物预览")).getAttribute("src")).toBe("blob:local-preview");
     expect(fetch).toHaveBeenCalledWith("/_local-artifact?episode=episode-review&path=episodes%2Fepisode-review%2Fcover.png", { headers: { Authorization: "Bearer owner-token" } });
@@ -137,9 +141,25 @@ describe("审核台", () => {
     expect(onTransition).toHaveBeenLastCalledWith(reviewEpisode.id, "script_draft", "脚本符合账号蓝图。");
 
     const nextEpisode: Episode = { ...reviewEpisode, id: "episode-next", title: "新的审核 Episode" };
-    rerender(<EpisodeDetail artifacts={[previewArtifact]} blueprint={blueprint} episode={nextEpisode} isTransitionPending={false} onTransition={onTransition} tasks={[]} transitions={[]} />);
+    rerender(<EpisodeDetail artifacts={[previewArtifact]} blueprint={blueprint} episode={nextEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={onCreateLocalDirectory} onTransition={onTransition} tasks={[]} transitions={[]} />);
     await user.click(screen.getByRole("button", { name: "批准" }));
     expect(screen.getByText("请填写审批理由。")).toBeTruthy();
     expect(onTransition).toHaveBeenCalledTimes(2);
+  });
+
+  it("显示完整 Episode ID，并允许 Owner 复制 ID 和创建固定本地目录", async () => {
+    const user = userEvent.setup();
+    const onCreateLocalDirectory = vi.fn().mockResolvedValue(undefined);
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText } });
+
+    render(<EpisodeDetail artifacts={[]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} onCreateLocalDirectory={onCreateLocalDirectory} isTransitionPending={false} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    expect((screen.getByLabelText("完整 Episode ID") as HTMLInputElement).value).toBe(reviewEpisode.id);
+    await user.click(screen.getByRole("button", { name: "复制 Episode ID" }));
+    expect(writeText).toHaveBeenCalledWith(reviewEpisode.id);
+
+    await user.click(screen.getByRole("button", { name: "创建本地目录" }));
+    expect(onCreateLocalDirectory).toHaveBeenCalledWith(reviewEpisode.id);
   });
 });
