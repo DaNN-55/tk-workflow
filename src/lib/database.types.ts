@@ -422,32 +422,56 @@ export type Database = {
       }
       tasks: {
         Row: {
-          budget_limit_cents: number | null
+          actual_cost_cents: number | null
+          attempt: number
+          budget_limit_cents: number
+          claimed_at: string | null
+          completed_at: string | null
           created_at: string
           episode_id: string
           id: string
           input_snapshot: Json
+          last_result: Json | null
           max_attempts: number
+          model: string
+          prompt_version: string
+          provider: string
           status: Database["public"]["Enums"]["task_status"]
           task_type: string
         }
         Insert: {
-          budget_limit_cents?: number | null
+          actual_cost_cents?: number | null
+          attempt?: number
+          budget_limit_cents?: number
+          claimed_at?: string | null
+          completed_at?: string | null
           created_at?: string
           episode_id: string
           id?: string
           input_snapshot?: Json
+          last_result?: Json | null
           max_attempts?: number
+          model?: string
+          prompt_version?: string
+          provider?: string
           status?: Database["public"]["Enums"]["task_status"]
           task_type: string
         }
         Update: {
-          budget_limit_cents?: number | null
+          actual_cost_cents?: number | null
+          attempt?: number
+          budget_limit_cents?: number
+          claimed_at?: string | null
+          completed_at?: string | null
           created_at?: string
           episode_id?: string
           id?: string
           input_snapshot?: Json
+          last_result?: Json | null
           max_attempts?: number
+          model?: string
+          prompt_version?: string
+          provider?: string
           status?: Database["public"]["Enums"]["task_status"]
           task_type?: string
         }
@@ -667,7 +691,7 @@ export type Database = {
         | "metrics_collecting"
         | "learning_recorded"
       member_role: "owner" | "worker"
-      task_status: "ready" | "completed" | "blocked"
+      task_status: "ready" | "running" | "completed" | "blocked" | "failed"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -817,7 +841,7 @@ export const Constants = {
         "learning_recorded",
       ],
       member_role: ["owner", "worker"],
-      task_status: ["ready", "completed", "blocked"],
+      task_status: ["ready", "running", "completed", "blocked", "failed"],
     },
   },
 } as const
