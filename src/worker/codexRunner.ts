@@ -175,6 +175,7 @@ function media(snapshot: Record<string, unknown>): WorkerTaskPackageInput["media
           id: requiredString(soundtrack.cue.id, "声轨任务缺少声轨 ID。"),
           kind: requiredSoundtrackKind(soundtrack.cue.kind),
           description: requiredString(soundtrack.cue.description, "声轨任务缺少声轨说明。"),
+          searchQuery: requiredString(soundtrack.cue.search_query, "声轨任务缺少冻结检索词。"),
           startSeconds: requiredNonNegativeNumber(soundtrack.cue.start_seconds, "声轨任务缺少有效起始时间。"),
           durationSeconds: requiredPositiveNumber(soundtrack.cue.duration_seconds, "声轨任务缺少有效时长。"),
         },

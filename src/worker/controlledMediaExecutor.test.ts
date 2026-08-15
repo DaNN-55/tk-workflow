@@ -91,7 +91,7 @@ describe("受控媒体执行器", () => {
       task: { id: "task-5", type: "generate_soundtrack", attempt: 0, budgetLimitCents: 0, maxAttempts: 1, provider: "freesound", model: "freesound-preview-v1", promptVersion: "soundtrack-v1" },
       capability: "soundtrack_generation",
       output: { requiredArtifactTypes: ["soundtrack_audio"], contentType: "audio/mpeg", relativePath: "episodes/episode-1/audio/sfx-bell.mp3", reviewStage: "production_ready" },
-      media: { adapter: "freesound_preview", soundtrack: { query: "rain bell", targetDurationSeconds: 4, cue: { id: "bell", kind: "sfx", description: "雨中铜铃", startSeconds: 2, durationSeconds: 4 } } },
+      media: { adapter: "freesound_preview", soundtrack: { query: "rain bell", targetDurationSeconds: 4, cue: { id: "bell", kind: "sfx", description: "雨中铜铃", searchQuery: "rain bell", startSeconds: 2, durationSeconds: 4 } } },
     });
     const fetcher = vi.fn()
       .mockResolvedValueOnce(new Response(JSON.stringify({ results: [{ id: 9, name: "rain bell", username: "creator", license: "Creative Commons 0", duration: 5, url: "https://freesound.org/s/9/", previews: { "preview-hq-mp3": "https://cdn.test/bell.mp3" } }] }), { status: 200 }))

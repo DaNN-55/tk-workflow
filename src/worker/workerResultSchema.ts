@@ -38,11 +38,12 @@ const storyboardSchema = {
       items: {
         type: "object",
         additionalProperties: false,
-        required: ["id", "kind", "description", "startSeconds", "durationSeconds"],
+        required: ["id", "kind", "description", "searchQuery", "startSeconds", "durationSeconds"],
         properties: {
           id: { type: "string", minLength: 1 },
           kind: { type: "string", enum: ["bgm", "sfx"] },
           description: { type: "string", minLength: 1 },
+          searchQuery: { type: "string", minLength: 1, maxLength: 100 },
           startSeconds: { type: "number", minimum: 0 },
           durationSeconds: { type: "number", exclusiveMinimum: 0 },
         },

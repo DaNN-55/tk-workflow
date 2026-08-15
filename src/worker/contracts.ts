@@ -30,6 +30,7 @@ export interface StoryboardAudioCue {
   id: string;
   kind: "bgm" | "sfx";
   description: string;
+  searchQuery: string;
   startSeconds: number;
   durationSeconds: number;
 }
@@ -374,13 +375,13 @@ export function validateStoryboardManifest(value: unknown, frozenInputs: Artifac
     if (!isRecord(candidate)) throw new Error("分镜声轨声明格式无效。");
     if (audioCueIds.has(candidate.id)) throw new Error("分镜声轨声明 ID 不能重复。");
     audioCueIds.add(candidate.id);
-    return { id: candidate.id, kind: candidate.kind as StoryboardAudioCue["kind"], description: candidate.description, startSeconds: candidate.startSeconds, durationSeconds: candidate.durationSeconds };
+    return { id: candidate.id, kind: candidate.kind as StoryboardAudioCue["kind"], description: candidate.description, searchQuery: candidate.searchQuery, startSeconds: candidate.startSeconds, durationSeconds: candidate.durationSeconds };
   });
   return { version: "storyboard/v1", shots, audioCues };
 }
 
 function validateStoryboardAudioCue(value: unknown): asserts value is StoryboardAudioCue {
-  if (!isRecord(value) || !isNonEmptyString(value.id) || (value.kind !== "bgm" && value.kind !== "sfx") || !isNonEmptyString(value.description) || !isNonNegativeNumber(value.startSeconds) || !isPositiveFiniteNumber(value.durationSeconds)) throw new Error("分镜声轨声明格式无效。");
+  if (!isRecord(value) || !isNonEmptyString(value.id) || (value.kind !== "bgm" && value.kind !== "sfx") || !isNonEmptyString(value.description) || !isNonEmptyString(value.searchQuery) || value.searchQuery.length > 100 || !isNonNegativeNumber(value.startSeconds) || !isPositiveFiniteNumber(value.durationSeconds)) throw new Error("分镜声轨声明格式无效。");
 }
 
 function parseMediaSource(value: unknown): NonNullable<WorkerResult["mediaSource"]> {
