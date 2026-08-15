@@ -36,6 +36,8 @@ export function collectNotifications(
       if (!stage) continue;
       if (stage.endsWith("_review")) approvalStages.push(stage);
       else stateStages.push(stage);
+    } else if (event.eventType === "pre_render_review_package_created") {
+      approvalStages.push("pre_render_review");
     } else if (event.eventType === "a_roll_task_blocked" || event.eventType === "b_roll_task_blocked" || event.eventType === "narration_task_blocked" || event.eventType === "soundtrack_task_blocked") {
       const detail = blockerDetailFromPayload(event.payload);
       if (detail) blockerDetails.push(detail);

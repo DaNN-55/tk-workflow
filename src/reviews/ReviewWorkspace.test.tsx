@@ -128,11 +128,13 @@ describe("审核台", () => {
   it("只列出需要 Owner 审核的 Episode，并允许选择其中一项", async () => {
     const user = userEvent.setup();
     const onSelectEpisode = vi.fn();
+    const productionEpisode: Episode = { ...reviewEpisode, id: "episode-production", stage: "production_ready", title: "预渲染审核" };
 
-    render(<ReviewWorkspace accountsById={new Map([[account.id, account]])} episodes={[reviewEpisode, draftEpisode]} onSelectEpisode={onSelectEpisode} selectedEpisode={null} />);
+    render(<ReviewWorkspace accountsById={new Map([[account.id, account]])} episodes={[reviewEpisode, productionEpisode, draftEpisode]} onSelectEpisode={onSelectEpisode} selectedEpisode={null} />);
 
     expect(screen.getByRole("heading", { name: "待审核 Episode" })).toBeTruthy();
     expect(screen.getByRole("button", { name: /越南民间信仰中的符号/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /预渲染审核/ })).toBeTruthy();
     expect(screen.queryByText("不应出现在审核队列")).toBeNull();
 
     await user.click(screen.getByRole("button", { name: /越南民间信仰中的符号/ }));
@@ -345,6 +347,8 @@ describe("审核台", () => {
       created_at: "2026-08-14T00:00:00.000Z",
       episode_id: reviewEpisode.id,
       id: "review-package-script-1",
+      invalidated_at: null,
+      invalidated_reason: null,
       revision_number: 1,
       stage: "script_review",
       task_id: "task-script-1",
@@ -402,6 +406,8 @@ describe("审核台", () => {
       created_at: "2026-08-14T00:00:00.000Z",
       episode_id: visualEpisode.id,
       id: "review-package-1",
+      invalidated_at: null,
+      invalidated_reason: null,
       revision_number: 1,
       stage: "visual_review",
       task_id: "task-visual-1",
@@ -475,6 +481,8 @@ describe("审核台", () => {
       created_at: "2026-08-14T00:00:00.000Z",
       episode_id: storyboardEpisode.id,
       id: "review-package-storyboard-previous",
+      invalidated_at: null,
+      invalidated_reason: null,
       revision_number: 1,
       stage: "storyboard_review",
       task_id: "task-storyboard-1",
@@ -485,6 +493,8 @@ describe("审核台", () => {
       created_at: "2026-08-15T00:00:00.000Z",
       episode_id: storyboardEpisode.id,
       id: "review-package-storyboard-1",
+      invalidated_at: null,
+      invalidated_reason: null,
       revision_number: 2,
       stage: "storyboard_review",
       task_id: "task-storyboard-2",
@@ -521,6 +531,8 @@ describe("审核台", () => {
       created_at: "2026-08-15T00:00:00.000Z",
       episode_id: storyboardEpisode.id,
       id: "review-package-invalid-storyboard",
+      invalidated_at: null,
+      invalidated_reason: null,
       revision_number: 1,
       stage: "storyboard_review",
       task_id: "task-invalid-storyboard",
@@ -530,5 +542,52 @@ describe("审核台", () => {
     expect(await screen.findByText("分镜产物格式无效，无法审核。")).toBeTruthy();
     expect(screen.queryByRole("button", { name: "批准" })).toBeNull();
     expect(screen.queryByRole("button", { name: "要求修改" })).toBeNull();
+  });
+
+  it("逐项审核冻结的预渲染成员，全部批准后才进入合成", async () => {
+    const user = userEvent.setup();
+    const onReviewPreRenderMember = vi.fn().mockResolvedValue(undefined);
+    const onTransition = vi.fn().mockResolvedValue(true);
+    const productionEpisode: Episode = { ...reviewEpisode, stage: "production_ready" };
+    const preRenderPackage = {
+      artifact_id: null,
+      context_snapshot: {},
+      created_at: "2026-08-15T00:00:00.000Z",
+      episode_id: productionEpisode.id,
+      id: "pre-render-package-1",
+      invalidated_at: null,
+      invalidated_reason: null,
+      revision_number: 1,
+      stage: "production_ready" as const,
+      task_id: null,
+      task_run_id: null,
+    };
+    const member = {
+      artifact_id: videoArtifact.id,
+      audio_track_id: null,
+      created_at: "2026-08-15T00:00:00.000Z",
+      evidence_snapshot: {
+        artifact: { relative_path: videoArtifact.relative_path, sha256: videoArtifact.sha256 },
+        task: { model: "pexels-v1", prompt_version: "b-roll-v1", provider: "pexels" },
+      },
+      id: "pre-render-member-1",
+      member_key: "shot:shot-02",
+      member_kind: "shot_media",
+      review_package_id: preRenderPackage.id,
+      source_task_id: "task-b-roll-1",
+    };
+
+    const { rerender } = render(<EpisodeDetail {...materialInputProps} artifacts={[videoArtifact]} blueprint={blueprint} episode={productionEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onReviewPreRenderMember={onReviewPreRenderMember} onTransition={onTransition} preRenderReviewMemberDecisions={[]} preRenderReviewMembers={[member]} reviewPackages={[preRenderPackage]} tasks={[]} transitions={[]} />);
+
+    expect(screen.getByText("预渲染审核包 · 修订 v1")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "批准预渲染包并进入合成" }).hasAttribute("disabled")).toBe(true);
+    await user.type(screen.getByLabelText("shot:shot-02 审核理由"), "镜头节奏与素材质量符合要求。");
+    await user.click(screen.getByRole("button", { name: "批准此项" }));
+    expect(onReviewPreRenderMember).toHaveBeenCalledWith({ decision: "approved", memberKey: "shot:shot-02", reason: "镜头节奏与素材质量符合要求。", reviewPackageId: preRenderPackage.id });
+
+    rerender(<EpisodeDetail {...materialInputProps} artifacts={[videoArtifact]} blueprint={blueprint} episode={productionEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={onTransition} preRenderReviewMemberDecisions={[{ actor_id: "owner-1", created_at: "2026-08-15T00:00:00.000Z", decision: "approved", inherited_from_review_package_id: null, member_key: member.member_key, reason: "镜头节奏与素材质量符合要求。", review_package_id: preRenderPackage.id }]} preRenderReviewMembers={[member]} reviewPackages={[preRenderPackage]} tasks={[]} transitions={[]} />);
+    await user.type(screen.getByLabelText("预渲染审核理由"), "所有冻结媒体与音频都已审核完毕。");
+    await user.click(screen.getByRole("button", { name: "批准预渲染包并进入合成" }));
+    expect(onTransition).toHaveBeenLastCalledWith(productionEpisode.id, "render_ready", "所有冻结媒体与音频都已审核完毕。");
   });
 });

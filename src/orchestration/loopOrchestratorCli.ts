@@ -42,7 +42,8 @@ async function dispatchTask(): Promise<void> {
       return parseLastJsonLine(workerResult.stdout);
     },
   });
-  process.stdout.write(JSON.stringify({ mode: "dispatch", ...result }) + "\n");
+  const preRenderPackages = await orchestrateTasks("create_pre_render_review_packages");
+  process.stdout.write(JSON.stringify({ mode: "dispatch", ...result, preRenderReviewPackages: preRenderPackages.length }) + "\n");
 }
 
 async function planWorkerTasks(): Promise<Array<{ id: string }>> {
@@ -118,7 +119,7 @@ async function fetchAuditEvents(cursor: NotificationCursor | null): Promise<Audi
   const { url, serviceRoleKey } = supabaseCredentials();
   const endpoint = new URL("/rest/v1/audit_events", url);
   endpoint.searchParams.set("select", "id,created_at,event_type,payload");
-  endpoint.searchParams.set("event_type", "in.(stage_transition,a_roll_task_blocked,b_roll_task_blocked,narration_task_blocked,soundtrack_task_blocked)");
+  endpoint.searchParams.set("event_type", "in.(stage_transition,pre_render_review_package_created,a_roll_task_blocked,b_roll_task_blocked,narration_task_blocked,soundtrack_task_blocked)");
   endpoint.searchParams.set("order", "created_at.asc,id.asc");
   endpoint.searchParams.set("limit", "1000");
   if (cursor) endpoint.searchParams.set("created_at", `gte.${cursor.createdAt}`);

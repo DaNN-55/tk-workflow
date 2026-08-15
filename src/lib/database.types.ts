@@ -616,39 +616,75 @@ export type Database = {
           },
         ]
       }
+      pre_render_review_member_decisions: {
+        Row: {
+          actor_id: string
+          created_at: string
+          decision: string
+          inherited_from_review_package_id: string | null
+          member_key: string
+          reason: string
+          review_package_id: string
+        }
+        Insert: { actor_id: string; created_at?: string; decision: string; inherited_from_review_package_id?: string | null; member_key: string; reason: string; review_package_id: string }
+        Update: { actor_id?: string; created_at?: string; decision?: string; inherited_from_review_package_id?: string | null; member_key?: string; reason?: string; review_package_id?: string }
+        Relationships: []
+      }
+      pre_render_review_members: {
+        Row: {
+          artifact_id: string | null
+          audio_track_id: string | null
+          created_at: string
+          evidence_snapshot: Json
+          id: string
+          member_key: string
+          member_kind: string
+          review_package_id: string
+          source_task_id: string
+        }
+        Insert: { artifact_id?: string | null; audio_track_id?: string | null; created_at?: string; evidence_snapshot: Json; id?: string; member_key: string; member_kind: string; review_package_id: string; source_task_id: string }
+        Update: { artifact_id?: string | null; audio_track_id?: string | null; created_at?: string; evidence_snapshot?: Json; id?: string; member_key?: string; member_kind?: string; review_package_id?: string; source_task_id?: string }
+        Relationships: []
+      }
       review_packages: {
         Row: {
-          artifact_id: string
+          artifact_id: string | null
           context_snapshot: Json
           created_at: string
           episode_id: string
           id: string
+          invalidated_at: string | null
+          invalidated_reason: string | null
           revision_number: number
           stage: Database["public"]["Enums"]["episode_stage"]
-          task_id: string
-          task_run_id: string
+          task_id: string | null
+          task_run_id: string | null
         }
         Insert: {
-          artifact_id: string
+          artifact_id?: string | null
           context_snapshot: Json
           created_at?: string
           episode_id: string
           id?: string
+          invalidated_at?: string | null
+          invalidated_reason?: string | null
           revision_number: number
           stage: Database["public"]["Enums"]["episode_stage"]
-          task_id: string
-          task_run_id: string
+          task_id?: string | null
+          task_run_id?: string | null
         }
         Update: {
-          artifact_id?: string
+          artifact_id?: string | null
           context_snapshot?: Json
           created_at?: string
           episode_id?: string
           id?: string
+          invalidated_at?: string | null
+          invalidated_reason?: string | null
           revision_number?: number
           stage?: Database["public"]["Enums"]["episode_stage"]
-          task_id?: string
-          task_run_id?: string
+          task_id?: string | null
+          task_run_id?: string | null
         }
         Relationships: [
           {
@@ -852,6 +888,11 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      create_pre_render_review_packages: {
+        Args: Record<PropertyKey, never>
+        Returns: Database["public"]["Tables"]["review_packages"]["Row"][]
+        SetofOptions: { from: "*"; to: "review_packages"; isOneToOne: false; isSetofReturn: true }
+      }
       activate_blueprint_version: {
         Args: { p_account_id: string; p_blueprint_version_id: string }
         Returns: {
@@ -1157,6 +1198,11 @@ export type Database = {
           task_type: string
         }
         SetofOptions: { from: "*"; to: "tasks"; isOneToOne: true; isSetofReturn: false }
+      }
+      review_pre_render_member: {
+        Args: { p_decision: string; p_member_key: string; p_reason: string; p_review_package_id: string }
+        Returns: Database["public"]["Tables"]["pre_render_review_member_decisions"]["Row"]
+        SetofOptions: { from: "*"; to: "pre_render_review_member_decisions"; isOneToOne: true; isSetofReturn: false }
       }
       transition_episode: {
         Args: {
