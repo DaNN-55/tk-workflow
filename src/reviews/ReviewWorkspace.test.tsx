@@ -195,6 +195,21 @@ describe("审核台", () => {
     expect(screen.getByText("最新结果：执行中")).toBeTruthy();
   });
 
+  it("在冻结执行器缺失时仍展示 A-roll 阻塞状态", () => {
+    const aRollTask: Task = {
+      ...blockedTask,
+      input_snapshot: { capability: "a_roll_generation", shot: { id: "shot-02" } },
+      last_result: { blockers: [{ code: "a_roll_executor_missing", detail: "蓝图未声明执行器。" }] },
+      task_type: "generate_a_roll",
+    };
+
+    render(<EpisodeDetail {...materialInputProps} artifacts={[]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} tasks={[aRollTask]} transitions={[]} />);
+
+    expect(screen.getByText("A-roll 任务 · blocked")).toBeTruthy();
+    expect(screen.getByText("冻结执行器配置不可用；请查看下方 Worker 阻塞项。")).toBeTruthy();
+    expect(screen.getByText("a_roll_executor_missing")).toBeTruthy();
+  });
+
   it("以纵向缩略图展示产物，并允许 Owner 放大后关闭预览", async () => {
     const user = userEvent.setup();
 

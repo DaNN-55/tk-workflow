@@ -1110,12 +1110,12 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
 }
 
 function ArollTaskEvidencePanel({ tasks }: { tasks: Task[] }) {
-  const evidenceTasks = tasks.flatMap((task) => {
+  const aRollTasks = tasks.filter((task) => task.task_type === "generate_a_roll");
+  if (!aRollTasks.length) return null;
+  return <section className="review-section"><h3>A-roll 生成运行</h3>{aRollTasks.map((task) => {
     const evidence = aRollTaskEvidence(task);
-    return evidence ? [{ evidence, task }] : [];
-  });
-  if (!evidenceTasks.length) return null;
-  return <section className="review-section"><h3>A-roll 生成运行</h3>{evidenceTasks.map(({ evidence, task }) => <article className="worker-blocker" key={task.id}><strong>{evidence.shotId} · {task.status}</strong><dl><div><dt>执行器</dt><dd>{evidence.provider} · {evidence.model} · {evidence.promptVersion}</dd></div><div><dt>适配器</dt><dd>{evidence.adapter}</dd></div><div><dt>允许工具</dt><dd>{evidence.allowedTools.join("、")}</dd></div><div><dt>冻结输入哈希</dt><dd>{evidence.inputHashes.map((hash) => `${hash.slice(0, 12)}…`).join("、")}</dd></div><div><dt>运行尝试</dt><dd>{task.attempt} / {task.max_attempts}</dd></div><div><dt>实际成本</dt><dd>{task.actual_cost_cents ?? 0} 分</dd></div></dl>{task.last_result ? <p className="muted-copy">最新结果：{task.status === "completed" ? "已完成" : task.status === "running" ? "执行中" : task.status === "ready" ? "等待领取" : "需要 Owner 处理"}</p> : null}</article>)}</section>;
+    return <article className="worker-blocker" key={task.id}><strong>{evidence?.shotId ?? "A-roll 任务"} · {task.status}</strong>{evidence ? <dl><div><dt>执行器</dt><dd>{evidence.provider} · {evidence.model} · {evidence.promptVersion}</dd></div><div><dt>适配器</dt><dd>{evidence.adapter}</dd></div><div><dt>允许工具</dt><dd>{evidence.allowedTools.join("、")}</dd></div><div><dt>冻结输入哈希</dt><dd>{evidence.inputHashes.map((hash) => `${hash.slice(0, 12)}…`).join("、")}</dd></div></dl> : <p className="muted-copy">冻结执行器配置不可用；请查看下方 Worker 阻塞项。</p>}<dl><div><dt>运行尝试</dt><dd>{task.attempt} / {task.max_attempts}</dd></div><div><dt>实际成本</dt><dd>{task.actual_cost_cents ?? 0} 分</dd></div></dl>{task.last_result ? <p className="muted-copy">最新结果：{task.status === "completed" ? "已完成" : task.status === "running" ? "执行中" : task.status === "ready" ? "等待领取" : "需要 Owner 处理"}</p> : null}</article>;
+  })}</section>;
 }
 
 function ScriptCommissionForm({ episodeId, isPending, onCommission }: { episodeId: string; isPending: boolean; onCommission: (input: ScriptCommissionRequest) => Promise<void> }) {
