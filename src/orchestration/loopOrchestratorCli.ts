@@ -11,6 +11,7 @@ const projectRoot = requiredEnvironment("LOOP_PROJECT_ROOT");
 const stateDirectory = process.env.LOOP_N8N_STATE_DIR ?? join(projectRoot, "n8n", "runtime", "orchestration");
 const backupDirectory = join(projectRoot, "n8n", "runtime", "backups");
 const mode = process.argv[2];
+const scopedEpisodeId = readEpisodeIdArgument(process.argv.slice(3));
 
 try {
   switch (mode) {
@@ -35,6 +36,18 @@ try {
 }
 
 async function dispatchTask(): Promise<void> {
+  if (scopedEpisodeId) {
+    const plannedTasks = await planScopedMediaTasks(scopedEpisodeId);
+    const workers: unknown[] = [];
+    for (let index = 0; index < plannedTasks.length; index += 1) {
+      const workerResult = await runCommand("npm", ["run", "worker:run"], projectRoot);
+      workers.push(parseLastJsonLine(workerResult.stdout));
+    }
+    const productionReadyEpisodes = await orchestrateTasks("advance_production_ready_episodes", { p_episode_id: scopedEpisodeId });
+    process.stdout.write(`${JSON.stringify({ mode: "dispatch", episodeId: scopedEpisodeId, plannedTasks: plannedTasks.length, workers, productionReadyEpisodes: productionReadyEpisodes.length })}\n`);
+    return;
+  }
+
   const result = await dispatchProvidedScriptWork({
     planTasks: planWorkerTasks,
     runWorker: async () => {
@@ -42,8 +55,15 @@ async function dispatchTask(): Promise<void> {
       return parseLastJsonLine(workerResult.stdout);
     },
   });
+  const productionReadyEpisodes = await orchestrateTasks("advance_production_ready_episodes");
   const preRenderPackages = await orchestrateTasks("create_pre_render_review_packages");
-  process.stdout.write(JSON.stringify({ mode: "dispatch", ...result, preRenderReviewPackages: preRenderPackages.length }) + "\n");
+  process.stdout.write(JSON.stringify({ mode: "dispatch", ...result, productionReadyEpisodes: productionReadyEpisodes.length, preRenderReviewPackages: preRenderPackages.length }) + "\n");
+}
+
+async function planScopedMediaTasks(episodeId: string): Promise<Array<{ id: string }>> {
+  const bRollTasks = await orchestrateTasks("orchestrate_b_roll_tasks", { p_episode_id: episodeId });
+  const narrationTasks = await orchestrateTasks("orchestrate_narration_tasks", { p_episode_id: episodeId });
+  return [...bRollTasks, ...narrationTasks];
 }
 
 async function planWorkerTasks(): Promise<Array<{ id: string }>> {
@@ -59,18 +79,26 @@ async function planWorkerTasks(): Promise<Array<{ id: string }>> {
   return [...visualTasks, ...storyboardTasks, ...aRollTasks, ...bRollTasks, ...narrationTasks, ...derivedAudioTasks, ...soundtrackTasks];
 }
 
-async function orchestrateTasks(functionName: string): Promise<Array<{ id: string }>> {
+async function orchestrateTasks(functionName: string, args: Record<string, string> = {}): Promise<Array<{ id: string }>> {
   const { url, serviceRoleKey } = supabaseCredentials();
   const endpoint = new URL(`/rest/v1/rpc/${functionName}`, url);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, "Content-Type": "application/json" },
-    body: "{}",
+    body: JSON.stringify(args),
   });
   if (!response.ok) throw new Error(`创建 Worker 任务失败：Supabase 返回 HTTP ${response.status}`);
   const payload: unknown = await response.json();
   if (!Array.isArray(payload) || payload.some((task) => !isRecord(task) || typeof task.id !== "string")) throw new Error("创建 Worker 任务失败：Supabase 返回格式无效。");
   return payload as Array<{ id: string }>;
+}
+
+function readEpisodeIdArgument(args: string[]): string | null {
+  if (args.length === 0) return null;
+  if (args.length !== 2 || args[0] !== "--episode" || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(args[1])) {
+    throw new Error("用法：orchestrator:run dispatch [--episode <UUID>]");
+  }
+  return args[1].toLowerCase();
 }
 
 async function notifyFor(kind: "approval" | "state"): Promise<void> {
