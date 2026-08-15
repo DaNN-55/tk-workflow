@@ -10,6 +10,21 @@ export interface ArtifactManifest {
   fileSize: number;
 }
 
+export interface StoryboardShotManifest {
+  id: string;
+  scriptSegment: string;
+  durationSeconds: number;
+  shotType: "a_roll" | "b_roll";
+  productionMethod: string;
+  inputBasis: Array<Pick<ArtifactManifest, "relativePath" | "sha256">>;
+  targetSpec: string;
+}
+
+export interface StoryboardManifest {
+  version: "storyboard/v1";
+  shots: StoryboardShotManifest[];
+}
+
 export interface WorkerTaskPackageInput {
   task: {
     id: string;
@@ -41,6 +56,10 @@ export interface WorkerTaskPackageInput {
     reviewPackageId: string;
     reason: string;
   };
+  reviewAnnotations?: Array<{
+    shotId: string;
+    reason: string;
+  }>;
   allowedTools: string[];
   allowedAssetRoot: string;
   output: {
@@ -71,6 +90,10 @@ export interface WorkerTaskPackage {
     reviewPackageId: string;
     reason: string;
   };
+  reviewAnnotations?: ReadonlyArray<{
+    shotId: string;
+    reason: string;
+  }>;
   allowedTools: readonly string[];
   task: Pick<WorkerTaskPackageInput["task"], "id" | "type">;
   accountId: string;
@@ -98,6 +121,7 @@ export interface WorkerResult {
   taskId: string;
   status: WorkerResultStatus;
   artifacts: ArtifactManifest[];
+  storyboard?: StoryboardManifest;
   validation: {
     passed: boolean;
     checks: Array<{ name: string; passed: boolean; detail: string }>;
@@ -124,6 +148,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
   if (input.commission && (!isNonEmptyString(input.commission.creativeDirection) || !isNonEmptyString(input.commission.coreContent))) throw new Error("commission must contain creative direction and core content.");
   if (input.seriesBaseline && (!isNonEmptyString(input.seriesBaseline.versionId) || !Number.isInteger(input.seriesBaseline.version) || input.seriesBaseline.version < 1 || !isRecord(input.seriesBaseline.rules))) throw new Error("seriesBaseline must contain a version and rule object.");
   if (input.reviewFeedback && (!isNonEmptyString(input.reviewFeedback.reviewPackageId) || !isNonEmptyString(input.reviewFeedback.reason))) throw new Error("review feedback must contain its package and reason.");
+  if (input.reviewAnnotations?.some((annotation) => !isNonEmptyString(annotation.shotId) || !isNonEmptyString(annotation.reason))) throw new Error("review annotations must contain a shot and reason.");
   if (input.allowedTools.some((tool) => !isNonEmptyString(tool))) throw new Error("allowedTools must contain non-empty names.");
   if (input.output.requiredArtifactTypes.length === 0 || input.output.requiredArtifactTypes.some((artifactType) => !isNonEmptyString(artifactType))) throw new Error("至少需要一个输出产物类型。");
   if (!isNonEmptyString(input.output.contentType) || !isNonEmptyString(input.output.reviewStage) || !isSafeRelativePath(input.output.relativePath)) throw new Error("输出契约缺少有效的内容类型、路径或审核阶段。");
@@ -139,6 +164,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     ...(input.commission ? { commission: { creativeDirection: input.commission.creativeDirection, coreContent: input.commission.coreContent } } : {}),
     ...(input.seriesBaseline ? { seriesBaseline: { versionId: input.seriesBaseline.versionId, version: input.seriesBaseline.version, rules: input.seriesBaseline.rules } } : {}),
     ...(input.reviewFeedback ? { reviewFeedback: { reviewPackageId: input.reviewFeedback.reviewPackageId, reason: input.reviewFeedback.reason } } : {}),
+    ...(input.reviewAnnotations?.length ? { reviewAnnotations: input.reviewAnnotations.map((annotation) => ({ shotId: annotation.shotId, reason: annotation.reason })) } : {}),
     allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
     accountId: input.episode.accountId,
@@ -168,6 +194,10 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
   value.blockers.forEach(assertBlocker);
   assertRetry(value.retry);
 
+  const storyboard = taskPackage.capability === "storyboard_planning" && value.status === "completed"
+    ? validateStoryboardManifest(value.storyboard, taskPackage.assets.inputs)
+    : undefined;
+  if (taskPackage.capability !== "storyboard_planning" && value.storyboard !== undefined) throw new Error("非分镜任务不能返回分镜内容。");
   if (value.status === "completed" && (!value.validation.passed || value.artifacts.length === 0 || value.blockers.length > 0)) {
     throw new Error("已完成结果必须包含通过验证的产物，且不能带有 blockers。");
   }
@@ -189,6 +219,7 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
     taskId: value.taskId,
     status: value.status,
     artifacts,
+    ...(storyboard ? { storyboard } : {}),
     validation: {
       passed: value.validation.passed,
       checks: value.validation.checks as WorkerResult["validation"]["checks"],
@@ -198,6 +229,35 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
     retry: value.retry as WorkerResult["retry"],
     nextStep: value.nextStep,
   };
+}
+
+export function validateStoryboardManifest(value: unknown, frozenInputs: ArtifactManifest[]): StoryboardManifest {
+  if (!isRecord(value) || value.version !== "storyboard/v1" || !Array.isArray(value.shots) || value.shots.length === 0) throw new Error("分镜内容格式无效。");
+  const shotIds = new Set<string>();
+  const shots = value.shots.map((candidate) => {
+    if (!isRecord(candidate) || !isNonEmptyString(candidate.id) || !isNonEmptyString(candidate.scriptSegment) || !isNonNegativeNumber(candidate.durationSeconds) || candidate.durationSeconds <= 0 || (candidate.shotType !== "a_roll" && candidate.shotType !== "b_roll") || !isNonEmptyString(candidate.productionMethod) || !Array.isArray(candidate.inputBasis) || candidate.inputBasis.length === 0 || !isNonEmptyString(candidate.targetSpec)) throw new Error("分镜镜头格式无效。");
+    if (shotIds.has(candidate.id)) throw new Error("分镜镜头 ID 不能重复。");
+    shotIds.add(candidate.id);
+    const shotType = candidate.shotType as StoryboardShotManifest["shotType"];
+    const inputBasis = candidate.inputBasis.map((input) => {
+      if (!isRecord(input) || !isSafeRelativePath(input.relativePath) || !isSha256(input.sha256)) throw new Error("分镜镜头输入依据格式无效。");
+      const frozenInput = frozenInputs.find((artifact) => artifact.relativePath === input.relativePath && artifact.sha256 === input.sha256);
+      if (!frozenInput) throw new Error("分镜镜头引用了未冻结输入。");
+      return { relativePath: input.relativePath, sha256: input.sha256 };
+    });
+    if (!inputBasis.some((input) => frozenInputs.some((artifact) => artifact.artifactType === "main_script" && artifact.relativePath === input.relativePath && artifact.sha256 === input.sha256))) throw new Error("每个分镜镜头必须引用冻结主脚本。");
+    if (!inputBasis.some((input) => frozenInputs.some((artifact) => artifact.artifactType !== "main_script" && artifact.relativePath === input.relativePath && artifact.sha256 === input.sha256))) throw new Error("每个分镜镜头必须引用冻结视觉依据。");
+    return {
+      id: candidate.id,
+      scriptSegment: candidate.scriptSegment,
+      durationSeconds: candidate.durationSeconds,
+      shotType,
+      productionMethod: candidate.productionMethod,
+      inputBasis,
+      targetSpec: candidate.targetSpec,
+    };
+  });
+  return { version: "storyboard/v1", shots };
 }
 
 function assertArtifactManifest(value: unknown): asserts value is ArtifactManifest {
@@ -233,6 +293,10 @@ function isSha256(value: unknown): value is string {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && typeof value === "number" && value >= 0;
+}
+
+function isNonNegativeNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
 }
 
 function isWorkerResultStatus(value: unknown): value is WorkerResultStatus {

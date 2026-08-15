@@ -9,8 +9,10 @@ import {
 } from "./codexRunner.js";
 import type { WorkerTaskPackage } from "./contracts.js";
 import type { ArtifactManifest } from "./contracts.js";
+import type { StoryboardManifest } from "./contracts.js";
 import { verifyArtifactIndex, verifyMediaLibrary } from "./mediaLibrary.js";
 import { nonNegativeIntegerEnvironment, requiredEnvironment } from "./runtimeEnvironment.js";
+import { verifyReportedStoryboardArtifact } from "./storyboardArtifact.js";
 
 const supabaseUrl = requiredEnvironment("SUPABASE_URL");
 const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
@@ -38,6 +40,41 @@ const workerResultJsonSchema = {
           relativePath: { type: "string" },
           sha256: { type: "string", pattern: "^[0-9a-f]{64}$" },
           fileSize: { type: "integer", minimum: 0 },
+        },
+      },
+    },
+    storyboard: {
+      type: "object",
+      additionalProperties: false,
+      required: ["version", "shots"],
+      properties: {
+        version: { type: "string", const: "storyboard/v1" },
+        shots: {
+          type: "array",
+          minItems: 1,
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "scriptSegment", "durationSeconds", "shotType", "productionMethod", "inputBasis", "targetSpec"],
+            properties: {
+              id: { type: "string", minLength: 1 },
+              scriptSegment: { type: "string", minLength: 1 },
+              durationSeconds: { type: "number", exclusiveMinimum: 0 },
+              shotType: { type: "string", enum: ["a_roll", "b_roll"] },
+              productionMethod: { type: "string", minLength: 1 },
+              inputBasis: {
+                type: "array",
+                minItems: 1,
+                items: {
+                  type: "object",
+                  additionalProperties: false,
+                  required: ["relativePath", "sha256"],
+                  properties: { relativePath: { type: "string" }, sha256: { type: "string", pattern: "^[0-9a-f]{64}$" } },
+                },
+              },
+              targetSpec: { type: "string", minLength: 1 },
+            },
+          },
         },
       },
     },
@@ -131,8 +168,14 @@ async function verifyAssetRoot(allowedAssetRoot: string): Promise<void> {
   });
 }
 
-async function verifyArtifacts(taskPackage: WorkerTaskPackage, artifacts: ArtifactManifest[]): Promise<void> {
+async function verifyArtifacts(taskPackage: WorkerTaskPackage, artifacts: ArtifactManifest[], storyboard?: StoryboardManifest): Promise<void> {
   await verifyArtifactIndex({ assetRoot: taskPackage.assets.allowedRoot, episodeId: taskPackage.episode.id, artifacts });
+  if (storyboard) await verifyReportedStoryboardArtifact({
+    assetRoot: taskPackage.assets.allowedRoot,
+    frozenInputs: [...taskPackage.assets.inputs],
+    relativePath: taskPackage.output.relativePath,
+    storyboard,
+  });
 }
 
 async function executeCodex(taskPackage: WorkerTaskPackage): Promise<string> {
@@ -166,6 +209,7 @@ function buildCodexPrompt(taskPackage: WorkerTaskPackage): string {
     "Use only the tools listed in allowedTools. If the task cannot be completed with them, return blocked instead of substituting another tool.",
     "allowedTools is a capability policy, not a list of Codex tool names. When it includes read and write, use your normal workspace filesystem tools only to read and write within assets.allowedRoot.",
     "When task package includes seriesBaseline, it is an approved, frozen reusable base. For visual planning, do not regenerate covered characters, voices, or visual references; create only additions or explicit deviations. Produce every output.requiredArtifactTypes, with the primary artifact at output.relativePath. Visual reference groups must be organized by character, location, and key prop; static visuals must be previewable images (SVG is allowed).",
+    "For storyboard_planning, write the primary artifact as valid JSON and also return the identical object in result.storyboard. It must have version storyboard/v1 and a non-empty shots array. Every shot needs id, scriptSegment, durationSeconds, shotType (a_roll or b_roll), productionMethod, inputBasis (objects containing each frozen input's relativePath and sha256), and targetSpec. Each shot must include the frozen main script and at least one approved visual input. Do not generate or queue A-roll, B-roll, or audio media; this task is only the reviewable storyboard. When reviewAnnotations are present, revise the matching shot IDs to address their reasons.",
     "Do not approve, publish, change any blueprint, call platform APIs, or change an Episode stage.",
     "If any required input, tool, permission, or rule is missing, return status blocked with explicit blockers; do not silently substitute a provider.",
     `Create the required artifact at output.relativePath inside episodes/${taskPackage.episode.id}/ and return a JSON result that matches the provided schema. Use paths relative to assets.allowedRoot and SHA-256 hashes in lowercase hexadecimal.`,

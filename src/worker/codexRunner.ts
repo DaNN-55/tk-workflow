@@ -27,7 +27,7 @@ export interface ClaimedWorkerTask {
 export interface CodexWorkerDependencies {
   claimNextTask(): Promise<ClaimedWorkerTask | null>;
   verifyAssetRoot(allowedAssetRoot: string): Promise<void>;
-  verifyArtifacts(taskPackage: WorkerTaskPackage, artifacts: ArtifactManifest[]): Promise<void>;
+  verifyArtifacts(taskPackage: WorkerTaskPackage, artifacts: ArtifactManifest[], storyboard?: WorkerResult["storyboard"]): Promise<void>;
   execute(taskPackage: WorkerTaskPackage): Promise<string>;
   reportResult(taskId: string, attempt: number, result: WorkerResult): Promise<void>;
   actualCostCents: number;
@@ -67,7 +67,7 @@ export async function runCodexWorker(dependencies: CodexWorkerDependencies): Pro
     const output = await dependencies.execute(taskPackage);
     const candidate = parseCodexOutput(output, dependencies.actualCostCents);
     const result = validateWorkerResult(candidate, taskPackage);
-    await dependencies.verifyArtifacts(taskPackage, result.artifacts);
+    await dependencies.verifyArtifacts(taskPackage, result.artifacts, result.storyboard);
     await dependencies.reportResult(task.taskId, task.attempt, result);
     return { status: result.status, taskId: task.taskId };
   } catch (error) {
@@ -100,6 +100,7 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
     commission: commission(snapshot),
     seriesBaseline: seriesBaseline(snapshot),
     reviewFeedback: reviewFeedback(snapshot),
+    reviewAnnotations: reviewAnnotations(snapshot),
     allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
     output,
@@ -136,6 +137,19 @@ function reviewFeedback(snapshot: Record<string, unknown>): WorkerTaskPackageInp
     reviewPackageId: requiredString(value.review_package_id, "任务审核反馈缺少审核包。"),
     reason: requiredString(value.reason, "任务审核反馈缺少修改理由。"),
   };
+}
+
+function reviewAnnotations(snapshot: Record<string, unknown>): WorkerTaskPackageInput["reviewAnnotations"] {
+  const value = snapshot.review_annotations;
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) throw new Error("任务镜头批注格式无效。");
+  return value.map((annotation) => {
+    if (!isRecord(annotation)) throw new Error("任务镜头批注格式无效。");
+    return {
+      shotId: requiredString(annotation.shot_id, "任务镜头批注缺少镜头。"),
+      reason: requiredString(annotation.reason, "任务镜头批注缺少内容。"),
+    };
+  });
 }
 
 function parseCodexOutput(output: string, actualCostCents: number): unknown {

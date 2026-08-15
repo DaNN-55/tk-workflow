@@ -641,6 +641,41 @@ export type Database = {
           },
         ]
       }
+      review_annotations: {
+        Row: {
+          actor_id: string
+          created_at: string
+          id: string
+          reason: string
+          review_package_id: string
+          shot_id: string
+        }
+        Insert: {
+          actor_id: string
+          created_at?: string
+          id?: string
+          reason: string
+          review_package_id: string
+          shot_id: string
+        }
+        Update: {
+          actor_id?: string
+          created_at?: string
+          id?: string
+          reason?: string
+          review_package_id?: string
+          shot_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "review_annotations_review_package_id_fkey"
+            columns: ["review_package_id"]
+            isOneToOne: false
+            referencedRelation: "review_packages"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       series: {
         Row: { account_id: string; created_at: string; id: string; name: string }
         Insert: { account_id: string; created_at?: string; id?: string; name: string }
@@ -918,9 +953,19 @@ export type Database = {
         Returns: Database["public"]["Tables"]["tasks"]["Row"]
         SetofOptions: { from: "*"; to: "tasks"; isOneToOne: true; isSetofReturn: false }
       }
+      create_storyboard_annotation: {
+        Args: { p_reason: string; p_review_package_id: string; p_shot_id: string }
+        Returns: Database["public"]["Tables"]["review_annotations"]["Row"]
+        SetofOptions: { from: "*"; to: "review_annotations"; isOneToOne: true; isSetofReturn: false }
+      }
       orchestrate_provided_script_tasks: {
         Args: Record<PropertyKey, never>
         Returns: Database["public"]["Tables"]["tasks"]["Row"][]
+      }
+      orchestrate_storyboard_tasks: {
+        Args: Record<PropertyKey, never>
+        Returns: Database["public"]["Tables"]["tasks"]["Row"][]
+        SetofOptions: { from: "*"; to: "tasks"; isOneToOne: false; isSetofReturn: true }
       }
       update_episode_title: {
         Args: { p_episode_id: string; p_title: string }

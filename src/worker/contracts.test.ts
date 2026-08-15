@@ -213,4 +213,46 @@ describe("Worker 契约", () => {
       nextStep: "Continue.",
     }, taskPackage)).toThrow("可预览图片");
   });
+
+  it("只接受可追溯到冻结脚本和视觉依据的唯一分镜镜头", () => {
+    const taskPackage = createWorkerTaskPackage({
+      ...packageInput,
+      capability: "storyboard_planning",
+      output: { requiredArtifactTypes: ["storyboard"], contentType: "application/json", relativePath: "episodes/episode-1/storyboard-v1.json", reviewStage: "storyboard_review" },
+      inputArtifacts: [
+        { artifactType: "main_script", relativePath: "episodes/episode-1/main-script.md", sha256: "a".repeat(64), fileSize: 128 },
+        { artifactType: "visual_brief", relativePath: "episodes/episode-1/visual-brief-v1.md", sha256: "b".repeat(64), fileSize: 128 },
+      ],
+    });
+    const result = {
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "completed",
+      artifacts: [{ artifactType: "storyboard", relativePath: "episodes/episode-1/storyboard-v1.json", sha256: "c".repeat(64), fileSize: 256 }],
+      storyboard: {
+        version: "storyboard/v1",
+        shots: [{
+          id: "shot-01",
+          scriptSegment: "林砚进入古宅。",
+          durationSeconds: 3,
+          shotType: "a_roll",
+          productionMethod: "实拍",
+          inputBasis: [
+            { relativePath: "episodes/episode-1/main-script.md", sha256: "a".repeat(64) },
+            { relativePath: "episodes/episode-1/visual-brief-v1.md", sha256: "b".repeat(64) },
+          ],
+          targetSpec: "9:16，1080×1920，24fps",
+        }],
+      },
+      validation: { passed: true, checks: [{ name: "schema", passed: true, detail: "valid storyboard" }] },
+      actualCostCents: 0,
+      blockers: [],
+      retry: { shouldRetry: false, reason: "Completed successfully." },
+      nextStep: "Submit storyboard for review.",
+    };
+
+    expect(validateWorkerResult(result, taskPackage)).toMatchObject({ storyboard: result.storyboard });
+    expect(() => validateWorkerResult({ ...result, storyboard: { ...result.storyboard, shots: [{ ...result.storyboard.shots[0], inputBasis: [{ relativePath: "episodes/episode-1/visual-brief-v1.md", sha256: "b".repeat(64) }] }] } }, taskPackage)).toThrow("主脚本");
+    expect(() => validateWorkerResult({ ...result, storyboard: { ...result.storyboard, shots: [result.storyboard.shots[0], result.storyboard.shots[0]] } }, taskPackage)).toThrow("不能重复");
+  });
 });

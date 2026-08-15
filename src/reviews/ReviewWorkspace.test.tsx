@@ -91,9 +91,12 @@ const blockedTask: Task = {
 const materialInputProps = {
   isMaterialPending: false,
   isScriptCommissionPending: false,
+  isStoryboardAnnotationPending: false,
   isTitlePending: false,
   materialRevisions: [],
+  reviewAnnotations: [],
   reviewPackages: [],
+  onCreateStoryboardAnnotation: vi.fn().mockResolvedValue(undefined),
   onImportMaterial: vi.fn().mockResolvedValue(undefined),
   onCommissionScript: vi.fn().mockResolvedValue(undefined),
   onUpdateTitle: vi.fn().mockResolvedValue(undefined),
@@ -361,5 +364,109 @@ describe("审核台", () => {
     expect(onTransition).toHaveBeenLastCalledWith(visualEpisode.id, "visual_approved", "视觉方向清晰，符合主脚本。");
     await user.click(screen.getByRole("button", { name: "要求修改" }));
     expect(onTransition).toHaveBeenLastCalledWith(visualEpisode.id, "visual_draft", "视觉方向清晰，符合主脚本。");
+  });
+
+  it("按镜头审核冻结分镜、保存批注，并执行批准或返工", async () => {
+    const user = userEvent.setup();
+    const onCreateStoryboardAnnotation = vi.fn().mockResolvedValue(undefined);
+    const onTransition = vi.fn().mockResolvedValue(undefined);
+    const storyboardEpisode: Episode = { ...reviewEpisode, stage: "storyboard_review" };
+    const storyboardArtifact: Artifact = {
+      ...previewArtifact,
+      artifact_type: "storyboard",
+      id: "artifact-storyboard-2",
+      producer_task_id: "task-storyboard-2",
+      relative_path: "episodes/episode-review/storyboard-v2.json",
+    };
+    const previousStoryboardArtifact: Artifact = {
+      ...storyboardArtifact,
+      id: "artifact-storyboard-1",
+      producer_task_id: "task-storyboard-1",
+      relative_path: "episodes/episode-review/storyboard-v1.json",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      version: "storyboard/v1",
+      shots: [{
+        id: "shot-02",
+        scriptSegment: "铜铃声切入，林砚回头。",
+        durationSeconds: 4.5,
+        shotType: "b_roll",
+        productionMethod: "素材库特写 + 环境音",
+        inputBasis: [
+          { relativePath: "episodes/episode-review/generated-script-v1.md", sha256: "b".repeat(64) },
+          { relativePath: "episodes/episode-review/visual-brief-v1.md", sha256: "c".repeat(64) },
+        ],
+        targetSpec: "9:16，1080×1920，24fps",
+      }],
+    }), { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    render(<EpisodeDetail {...materialInputProps} artifacts={[previousStoryboardArtifact, storyboardArtifact]} blueprint={blueprint} episode={storyboardEpisode} isDirectoryPending={false} isStoryboardAnnotationPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onCreateStoryboardAnnotation={onCreateStoryboardAnnotation} onTransition={onTransition} reviewAnnotations={[{
+      actor_id: "owner-1",
+      created_at: "2026-08-15T00:00:00.000Z",
+      id: "annotation-1",
+      reason: "先确认铜铃的音效节奏。",
+      review_package_id: "review-package-storyboard-1",
+      shot_id: "shot-02",
+    }]} reviewPackages={[{
+      artifact_id: previousStoryboardArtifact.id,
+      context_snapshot: {},
+      created_at: "2026-08-14T00:00:00.000Z",
+      episode_id: storyboardEpisode.id,
+      id: "review-package-storyboard-previous",
+      revision_number: 1,
+      stage: "storyboard_review",
+      task_id: "task-storyboard-1",
+      task_run_id: "task-run-storyboard-1",
+    }, {
+      artifact_id: storyboardArtifact.id,
+      context_snapshot: {},
+      created_at: "2026-08-15T00:00:00.000Z",
+      episode_id: storyboardEpisode.id,
+      id: "review-package-storyboard-1",
+      revision_number: 2,
+      stage: "storyboard_review",
+      task_id: "task-storyboard-2",
+      task_run_id: "task-run-storyboard-2",
+    }]} tasks={[]} transitions={[]} />);
+
+    expect(await screen.findByText("铜铃声切入，林砚回头。")).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "可审核分镜 · 修订 v2" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "shot-02 · B-roll" })).toBeTruthy();
+    expect(screen.getByText("4.5 秒")).toBeTruthy();
+    expect(screen.getByText("素材库特写 + 环境音")).toBeTruthy();
+    expect(screen.getByText("9:16，1080×1920，24fps")).toBeTruthy();
+    expect(screen.getByText("先确认铜铃的音效节奏。")).toBeTruthy();
+
+    await user.type(screen.getByLabelText("shot-02 镜头批注"), "铜铃特写需要延长。");
+    await user.click(screen.getByRole("button", { name: "添加镜头批注" }));
+    expect(onCreateStoryboardAnnotation).toHaveBeenCalledWith({ reviewPackageId: "review-package-storyboard-1", reason: "铜铃特写需要延长。", shotId: "shot-02" });
+
+    await user.type(screen.getByLabelText("审批理由"), "镜头拆分、规格与输入均可执行。");
+    await user.click(screen.getByRole("button", { name: "批准" }));
+    expect(onTransition).toHaveBeenLastCalledWith(storyboardEpisode.id, "storyboard_approved", "镜头拆分、规格与输入均可执行。");
+    await user.click(screen.getByRole("button", { name: "要求修改" }));
+    expect(onTransition).toHaveBeenLastCalledWith(storyboardEpisode.id, "storyboard_draft", "镜头拆分、规格与输入均可执行。");
+  });
+
+  it("分镜产物格式无效时不允许 Owner 批准或退回", async () => {
+    const storyboardEpisode: Episode = { ...reviewEpisode, stage: "storyboard_review" };
+    const storyboardArtifact: Artifact = { ...previewArtifact, artifact_type: "storyboard", id: "artifact-invalid-storyboard", producer_task_id: "task-invalid-storyboard", relative_path: "episodes/episode-review/storyboard-invalid.json" };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } })));
+
+    render(<EpisodeDetail {...materialInputProps} artifacts={[storyboardArtifact]} blueprint={blueprint} episode={storyboardEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} reviewPackages={[{
+      artifact_id: storyboardArtifact.id,
+      context_snapshot: {},
+      created_at: "2026-08-15T00:00:00.000Z",
+      episode_id: storyboardEpisode.id,
+      id: "review-package-invalid-storyboard",
+      revision_number: 1,
+      stage: "storyboard_review",
+      task_id: "task-invalid-storyboard",
+      task_run_id: "task-run-invalid-storyboard",
+    }]} tasks={[]} transitions={[]} />);
+
+    expect(await screen.findByText("分镜产物格式无效，无法审核。")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "批准" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "要求修改" })).toBeNull();
   });
 });

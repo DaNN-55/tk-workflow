@@ -125,6 +125,65 @@ describe("本地 Codex Worker runner", () => {
     }));
   });
 
+  it("把逐镜头批注和已批准视觉依据冻结给分镜 Worker", async () => {
+    const verifyArtifacts = vi.fn().mockResolvedValue(undefined);
+    const execute = vi.fn().mockResolvedValue(JSON.stringify({
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "completed",
+      artifacts: [{ artifactType: "storyboard", relativePath: "episodes/episode-1/storyboard-v2.json", sha256: "a".repeat(64), fileSize: 128 }],
+      storyboard: {
+        version: "storyboard/v1",
+        shots: [{
+          id: "shot-02",
+          scriptSegment: "铜铃声切入。",
+          durationSeconds: 4,
+          shotType: "b_roll",
+          productionMethod: "素材库特写",
+          inputBasis: [
+            { relativePath: "episodes/episode-1/main-script.md", sha256: "c".repeat(64) },
+            { relativePath: "episodes/episode-1/visual-brief-v1.md", sha256: "b".repeat(64) },
+          ],
+          targetSpec: "9:16，1080×1920，24fps",
+        }],
+      },
+      validation: { passed: true, checks: [{ name: "schema", passed: true, detail: "storyboard is complete" }] },
+      actualCostCents: 0,
+      blockers: [],
+      retry: { shouldRetry: false, reason: "Completed successfully." },
+      nextStep: "Submit the storyboard for Owner review.",
+    }));
+
+    await runCodexWorker({
+      claimNextTask: async () => ({
+        ...claimedTask,
+        taskType: "draft_storyboard",
+        inputSnapshot: {
+          capability: "storyboard_planning",
+          review_annotations: [{ shot_id: "shot-02", reason: "铜铃特写需要延长。" }],
+          allowed_tools: ["read", "write"],
+          output: { required_artifact_types: ["storyboard"], content_type: "application/json", relative_path: "episodes/episode-1/storyboard-v2.json", review_stage: "storyboard_review" },
+          input_artifacts: [
+            { artifactType: "main_script", relativePath: "episodes/episode-1/main-script.md", sha256: "c".repeat(64), fileSize: 128 },
+            { artifactType: "visual_brief", relativePath: "episodes/episode-1/visual-brief-v1.md", sha256: "b".repeat(64), fileSize: 128 },
+          ],
+        },
+      }),
+      reportResult: vi.fn().mockResolvedValue(undefined),
+      execute,
+      verifyAssetRoot: async () => undefined,
+      verifyArtifacts,
+      actualCostCents: 0,
+    });
+
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      reviewAnnotations: [{ shotId: "shot-02", reason: "铜铃特写需要延长。" }],
+      output: expect.objectContaining({ reviewStage: "storyboard_review" }),
+      assets: expect.objectContaining({ inputs: [expect.objectContaining({ artifactType: "main_script" }), expect.objectContaining({ artifactType: "visual_brief" })] }),
+    }));
+    expect(verifyArtifacts).toHaveBeenLastCalledWith(expect.any(Object), [expect.objectContaining({ artifactType: "storyboard" })], expect.objectContaining({ version: "storyboard/v1", shots: [expect.objectContaining({ id: "shot-02" })] }));
+  });
+
   it("缺少资产根目录时写入 blocked，不调用 Codex", async () => {
     const execute = vi.fn();
     const reportResult = vi.fn().mockResolvedValue(undefined);

@@ -6,7 +6,7 @@ export const defaultBlueprintPolicy = {
   approval_gates: ["script", "visual", "storyboard", "qc", "publish"],
   asset_root: "",
   allowed_tools: ["read", "write"],
-  budgets: { script_writing_cents: 0, visual_planning_cents: 0 },
+  budgets: { script_writing_cents: 0, visual_planning_cents: 0, storyboard_planning_cents: 0 },
   executors: {
     script_writing: {
       provider: "codex",
@@ -17,6 +17,11 @@ export const defaultBlueprintPolicy = {
       provider: "codex",
       model: "gpt-5.6-luna",
       prompt_version: "visual-planning-v1",
+    },
+    storyboard_planning: {
+      provider: "codex",
+      model: "gpt-5.6-luna",
+      prompt_version: "storyboard-planning-v1",
     },
   },
 };

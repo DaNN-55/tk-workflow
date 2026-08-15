@@ -36,7 +36,7 @@ try {
 
 async function dispatchTask(): Promise<void> {
   const result = await dispatchProvidedScriptWork({
-    planTasks: planProvidedScriptTasks,
+    planTasks: planWorkerTasks,
     runWorker: async () => {
       const workerResult = await runCommand("npm", ["run", "worker:run"], projectRoot);
       return parseLastJsonLine(workerResult.stdout);
@@ -45,17 +45,25 @@ async function dispatchTask(): Promise<void> {
   process.stdout.write(JSON.stringify({ mode: "dispatch", ...result }) + "\n");
 }
 
-async function planProvidedScriptTasks(): Promise<Array<{ id: string }>> {
+async function planWorkerTasks(): Promise<Array<{ id: string }>> {
+  const [visualTasks, storyboardTasks] = await Promise.all([
+    orchestrateTasks("orchestrate_provided_script_tasks"),
+    orchestrateTasks("orchestrate_storyboard_tasks"),
+  ]);
+  return [...visualTasks, ...storyboardTasks];
+}
+
+async function orchestrateTasks(functionName: string): Promise<Array<{ id: string }>> {
   const { url, serviceRoleKey } = supabaseCredentials();
-  const endpoint = new URL("/rest/v1/rpc/orchestrate_provided_script_tasks", url);
+  const endpoint = new URL(`/rest/v1/rpc/${functionName}`, url);
   const response = await fetch(endpoint, {
     method: "POST",
     headers: { apikey: serviceRoleKey, Authorization: `Bearer ${serviceRoleKey}`, "Content-Type": "application/json" },
     body: "{}",
   });
-  if (!response.ok) throw new Error(`创建已提供脚本任务失败：Supabase 返回 HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`创建 Worker 任务失败：Supabase 返回 HTTP ${response.status}`);
   const payload: unknown = await response.json();
-  if (!Array.isArray(payload) || payload.some((task) => !isRecord(task) || typeof task.id !== "string")) throw new Error("创建已提供脚本任务失败：Supabase 返回格式无效。");
+  if (!Array.isArray(payload) || payload.some((task) => !isRecord(task) || typeof task.id !== "string")) throw new Error("创建 Worker 任务失败：Supabase 返回格式无效。");
   return payload as Array<{ id: string }>;
 }
 

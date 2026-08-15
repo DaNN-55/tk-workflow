@@ -9,6 +9,7 @@ import { createPublicationConfirmation } from "./publishing/publicationConfirmat
 import { LearningWorkspace } from "./learning/LearningWorkspace";
 import type { ApproveBlueprintChangeSuggestionInput, SaveBlueprintChangeSuggestionInput, SaveExperimentInput, SaveLearningReportInput, SaveMetricSnapshotInput } from "./learning/LearningWorkspace";
 import { clearOperationDraft, readOperationDraft, writeOperationDraft } from "./operationDraft";
+import type { StoryboardShotManifest } from "./worker/contracts";
 
 type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
@@ -19,6 +20,7 @@ type Series = Database["public"]["Tables"]["series"]["Row"];
 type SeriesVersion = Database["public"]["Tables"]["series_versions"]["Row"];
 type MaterialRevision = Database["public"]["Tables"]["production_material_revisions"]["Row"];
 type ReviewPackage = Database["public"]["Tables"]["review_packages"]["Row"];
+type ReviewAnnotation = Database["public"]["Tables"]["review_annotations"]["Row"];
 type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
 type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
@@ -53,6 +55,12 @@ interface ScriptCommissionRequest {
   coreContent: string;
 }
 
+interface StoryboardAnnotationRequest {
+  reviewPackageId: string;
+  shotId: string;
+  reason: string;
+}
+
 interface Workspace {
   accounts: Account[];
   blueprints: Blueprint[];
@@ -61,6 +69,7 @@ interface Workspace {
   seriesVersions: SeriesVersion[];
   materialRevisions: MaterialRevision[];
   reviewPackages: ReviewPackage[];
+  reviewAnnotations: ReviewAnnotation[];
   artifacts: Artifact[];
   tasks: Task[];
   transitions: Transition[];
@@ -167,6 +176,12 @@ function reviewActionFor(stage: EpisodeStage): ReviewAction | null {
   return reviewActions[stage] ?? null;
 }
 
+function currentReviewPackage(reviewPackages: ReviewPackage[], episode: Episode): ReviewPackage | null {
+  return reviewPackages
+    .filter((candidate) => candidate.episode_id === episode.id && candidate.stage === episode.stage)
+    .reduce<ReviewPackage | null>((latest, candidate) => !latest || candidate.revision_number > latest.revision_number ? candidate : latest, null);
+}
+
 function workerBlockers(tasks: Task[], episodeId: string): WorkerBlocker[] {
   return tasks
     .filter((task) => task.episode_id === episodeId && task.status === "blocked")
@@ -207,7 +222,7 @@ function bytesToBase64(content: Uint8Array): string {
 }
 
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, reviewAnnotationsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
@@ -215,6 +230,7 @@ async function loadWorkspace(): Promise<Workspace> {
     supabase.from("series_versions").select("*").order("version", { ascending: false }),
     supabase.from("production_material_revisions").select("*").order("created_at", { ascending: false }),
     supabase.from("review_packages").select("*").order("created_at", { ascending: false }),
+    supabase.from("review_annotations").select("*").order("created_at"),
     supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
     supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
@@ -223,7 +239,7 @@ async function loadWorkspace(): Promise<Workspace> {
     supabase.from("metric_snapshots").select("*").order("captured_at", { ascending: false }),
     supabase.from("blueprint_change_suggestions").select("*").order("created_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, reviewAnnotationsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -237,6 +253,7 @@ async function loadWorkspace(): Promise<Workspace> {
     seriesVersions: seriesVersionsResult.data ?? [],
     materialRevisions: materialRevisionsResult.data ?? [],
     reviewPackages: reviewPackagesResult.data ?? [],
+    reviewAnnotations: reviewAnnotationsResult.data ?? [],
     artifacts: artifactsResult.data ?? [],
     tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
@@ -561,6 +578,27 @@ export function App() {
     }
   }
 
+  async function createStoryboardAnnotation(input: StoryboardAnnotationRequest): Promise<void> {
+    setPendingAction(`storyboard-annotation-${input.reviewPackageId}-${input.shotId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("create_storyboard_annotation", {
+        p_reason: input.reason,
+        p_review_package_id: input.reviewPackageId,
+        p_shot_id: input.shotId,
+      });
+      if (error) throw error;
+      setMessage("镜头批注已添加到当前冻结分镜修订。");
+      await refreshWorkspace();
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "无法添加镜头批注。";
+      setErrorMessage(message);
+      throw new Error(message);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   async function createLocalEpisodeDirectory(episodeId: string) {
     setPendingAction(`directory-${episodeId}`);
     setErrorMessage("");
@@ -798,6 +836,9 @@ export function App() {
             ownerId={session.user.id}
             materialRevisions={workspace.materialRevisions}
             reviewPackages={workspace.reviewPackages}
+            reviewAnnotations={workspace.reviewAnnotations}
+            isStoryboardAnnotationPending={pendingAction.startsWith("storyboard-annotation-")}
+            onCreateStoryboardAnnotation={createStoryboardAnnotation}
             tasks={workspace.tasks}
             transitions={workspace.transitions}
           />
@@ -1000,15 +1041,22 @@ export function PublicationConfirmationForm({ episode, isPending, onConfirm, own
   return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => updateDraft({ acknowledged: event.target.checked, reason })} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => updateDraft({ acknowledged, reason: event.target.value })} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label>{draft ? <OperationDraftNotice isRestored={isRestoredDraft} onClear={clearDraft} /> : null}<button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
-export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isScriptCommissionPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onCommissionScript, onImportMaterial, onTransition, onUpdateTitle, ownerId = "local-owner", reviewPackages, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isScriptCommissionPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onCommissionScript: (input: ScriptCommissionRequest) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
+export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isScriptCommissionPending, isStoryboardAnnotationPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onCommissionScript, onCreateStoryboardAnnotation, onImportMaterial, onTransition, onUpdateTitle, ownerId = "local-owner", reviewAnnotations, reviewPackages, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isScriptCommissionPending: boolean; isStoryboardAnnotationPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onCommissionScript: (input: ScriptCommissionRequest) => Promise<void>; onCreateStoryboardAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; reviewAnnotations: ReviewAnnotation[]; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
   const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
   const episodeMaterials = materialRevisions.filter((revision) => revision.episode_id === episode.id);
   const history = transitions.filter((transition) => transition.episode_id === episode.id);
   const blockers = workerBlockers(tasks, episode.id);
   const reviewAction = reviewActionFor(episode.stage);
-  const reviewPackage = reviewPackages.find((candidate) => candidate.episode_id === episode.id);
+  const reviewPackage = currentReviewPackage(reviewPackages, episode);
   const reviewArtifact = reviewPackage ? episodeArtifacts.find((candidate) => candidate.id === reviewPackage.artifact_id) : null;
   const reviewArtifacts = reviewPackage ? episodeArtifacts.filter((candidate) => candidate.producer_task_id === reviewPackage.task_id) : [];
+  const storyboardAnnotations = reviewPackage ? reviewAnnotations.filter((annotation) => annotation.review_package_id === reviewPackage.id) : [];
+  const [storyboardValidation, setStoryboardValidation] = useState({ packageId: "", valid: false });
+  const isStoryboardReviewValid = episode.stage !== "storyboard_review" || (reviewPackage?.stage === "storyboard_review" && storyboardValidation.packageId === reviewPackage.id && storyboardValidation.valid);
+  const onStoryboardValidationChange = useCallback((valid: boolean) => {
+    if (!reviewPackage) return;
+    setStoryboardValidation((current) => current.packageId === reviewPackage.id && current.valid === valid ? current : { packageId: reviewPackage.id, valid });
+  }, [reviewPackage]);
   const [directoryMessage, setDirectoryMessage] = useState("");
 
   async function copyEpisodeId() {
@@ -1029,11 +1077,11 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     <MaterialImportForm episodeId={episode.id} isPending={isMaterialPending} onImport={onImportMaterial} />
     <section className="review-section"><h3>生产材料修订</h3>{episodeMaterials.length ? episodeMaterials.map((revision) => <div className="material-revision" key={revision.id}><strong>{revision.is_main_script ? "主脚本" : revision.material_type} · v{revision.revision_number}</strong><span>{revision.source_kind} · {revision.source_path}</span><code>{revision.sha256.slice(0, 12)}… · {revision.storage_path}</code></div>) : <p className="muted-copy">还没有导入材料修订。</p>}</section>
     <div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div>
-    {reviewPackage?.stage !== "visual_review" ? <ArtifactPreview artifacts={episodeArtifacts} /> : null}
-    {reviewPackage && reviewArtifact ? reviewPackage.stage === "visual_review" ? <VisualReviewPackage artifact={reviewArtifact} artifacts={reviewArtifacts} reviewPackage={reviewPackage} /> : <TextReviewPackage artifact={reviewArtifact} reviewPackage={reviewPackage} /> : null}
+    {reviewPackage?.stage !== "visual_review" && reviewPackage?.stage !== "storyboard_review" ? <ArtifactPreview artifacts={episodeArtifacts} /> : null}
+    {reviewPackage && reviewArtifact ? reviewPackage.stage === "visual_review" ? <VisualReviewPackage artifact={reviewArtifact} artifacts={reviewArtifacts} reviewPackage={reviewPackage} /> : reviewPackage.stage === "storyboard_review" ? <StoryboardReviewPackage annotations={storyboardAnnotations} artifact={reviewArtifact} isAnnotationPending={isStoryboardAnnotationPending} onCreateAnnotation={onCreateStoryboardAnnotation} onValidationChange={onStoryboardValidationChange} reviewPackage={reviewPackage} /> : <TextReviewPackage artifact={reviewArtifact} reviewPackage={reviewPackage} /> : null}
     <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
     {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
-    {reviewAction ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} /> : null}
+    {reviewAction && isStoryboardReviewValid ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} /> : null}
     {episode.stage === "publishing_review" ? <section className="review-section publication-decision"><h3>发布确认</h3><PublicationConfirmationForm episode={episode} isPending={isTransitionPending} onConfirm={onTransition} ownerId={ownerId} /></section> : null}
     <section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section>
   </>;
@@ -1172,7 +1220,7 @@ function TextReviewPackage({ artifact, reviewPackage }: { artifact: Artifact; re
   return <section className="review-section text-review-package"><h3>可审核文本 · 修订 v{reviewPackage.revision_number}</h3><TextArtifactContent source={source} /><h4>冻结审核上下文</h4>{context ? <dl>{context.input.kind === "provided_script" ? <div><dt>主脚本 SHA-256</dt><dd>{context.input.scriptSha256.slice(0, 12)}…</dd></div> : <><div><dt>创作方向</dt><dd>{context.input.creativeDirection}</dd></div><div><dt>核心内容</dt><dd>{context.input.coreContent}</dd></div></>}{context.seriesBaseline ? <><div><dt>系列基准</dt><dd>系列基准 · v{context.seriesBaseline.version}</dd></div><div><dt>冻结系列规则</dt><dd><code>{JSON.stringify(context.seriesBaseline.rules)}</code></dd></div></> : null}<div><dt>能力</dt><dd>{context.capability}</dd></div><div><dt>执行器</dt><dd>{context.provider} · <span>{context.model}</span></dd></div><div><dt>预算</dt><dd>{context.budgetLimitCents} 分</dd></div><div><dt>允许工具</dt><dd>{context.allowedTools.join("、") || "无"}</dd></div><div><dt>输出契约</dt><dd>{context.contentType} · {context.requiredArtifactTypes.join("、")}</dd></div></dl> : <p className="form-error">冻结审核上下文格式无效。</p>}</section>;
 }
 
-function TextArtifactContent({ source }: { source: string | null }) {
+function useTextArtifactContent(source: string | null) {
   const [content, setContent] = useState("");
   const [error, setError] = useState("");
 
@@ -1195,6 +1243,11 @@ function TextArtifactContent({ source }: { source: string | null }) {
     return () => { isCurrent = false; };
   }, [source]);
 
+  return { content, error };
+}
+
+function TextArtifactContent({ source }: { source: string | null }) {
+  const { content, error } = useTextArtifactContent(source);
   return error ? <p className="form-error">{error}</p> : content ? <pre>{content}</pre> : <p className="muted-copy">正在读取文本产物…</p>;
 }
 
@@ -1202,6 +1255,60 @@ function VisualReviewPackage({ artifact, artifacts, reviewPackage }: { artifact:
   const referenceGroups = artifacts.filter((candidate) => candidate.artifact_type === "visual_reference_group");
   const staticVisuals = artifacts.filter((candidate) => candidate.artifact_type === "static_visual");
   return <><TextReviewPackage artifact={artifact} reviewPackage={reviewPackage} /><section className="review-section"><h3>角色 / 地点 / 关键道具参考组</h3>{referenceGroups.length ? referenceGroups.map((candidate) => <div key={candidate.id}><Artifact complete label={candidate.artifact_type} name={candidate.relative_path} /><TextArtifactContent source={localArtifactUrl(candidate.episode_id, candidate.relative_path, candidate.sha256)} /></div>) : <p className="form-error">视觉审核包缺少参考组。</p>}</section><section className="review-section"><h3>所需静态视觉</h3><ArtifactPreview artifacts={staticVisuals} />{staticVisuals.map((candidate) => <Artifact complete key={candidate.id} label={candidate.artifact_type} name={candidate.relative_path} />)}</section></>;
+}
+
+type StoryboardShot = StoryboardShotManifest;
+
+function parseStoryboard(source: string): StoryboardShot[] | null {
+  try {
+    const parsed: unknown = JSON.parse(source);
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== "object" || !("version" in parsed) || parsed.version !== "storyboard/v1" || !("shots" in parsed) || !Array.isArray(parsed.shots) || parsed.shots.length === 0) return null;
+    const shots: StoryboardShot[] = [];
+    for (const candidate of parsed.shots) {
+      if (!candidate || Array.isArray(candidate) || typeof candidate !== "object") return null;
+      const { durationSeconds, id, inputBasis, productionMethod, scriptSegment, shotType, targetSpec } = candidate;
+      if (typeof id !== "string" || !id.trim() || typeof scriptSegment !== "string" || !scriptSegment.trim() || typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || (shotType !== "a_roll" && shotType !== "b_roll") || typeof productionMethod !== "string" || !productionMethod.trim() || !Array.isArray(inputBasis) || inputBasis.length === 0 || inputBasis.some((input) => !input || Array.isArray(input) || typeof input !== "object" || typeof input.relativePath !== "string" || !input.relativePath.trim() || typeof input.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(input.sha256)) || typeof targetSpec !== "string" || !targetSpec.trim()) return null;
+      shots.push({ id, scriptSegment, durationSeconds, shotType, productionMethod, inputBasis: inputBasis as StoryboardShot["inputBasis"], targetSpec });
+    }
+    return shots;
+  } catch {
+    return null;
+  }
+}
+
+function StoryboardReviewPackage({ annotations, artifact, isAnnotationPending, onCreateAnnotation, onValidationChange, reviewPackage }: { annotations: ReviewAnnotation[]; artifact: Artifact; isAnnotationPending: boolean; onCreateAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; onValidationChange: (valid: boolean) => void; reviewPackage: ReviewPackage }) {
+  const source = localArtifactUrl(artifact.episode_id, artifact.relative_path, artifact.sha256);
+  const { content, error } = useTextArtifactContent(source);
+  const shots = content ? parseStoryboard(content) : null;
+  useEffect(() => { onValidationChange(!error && Boolean(shots)); }, [error, onValidationChange, shots]);
+  if (error) return <section className="review-section"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3><p className="form-error">{error}</p></section>;
+  if (!content) return <section className="review-section"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3><p className="muted-copy">正在读取分镜产物…</p></section>;
+  if (!shots) return <section className="review-section"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3><p className="form-error">分镜产物格式无效，无法审核。</p></section>;
+  return <section className="review-section storyboard-review-package"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3>{shots.map((shot) => {
+    const shotAnnotations = annotations.filter((annotation) => annotation.shot_id === shot.id);
+    return <article className="storyboard-shot" key={shot.id}><h4>{shot.id} · {shot.shotType === "a_roll" ? "A-roll" : "B-roll"}</h4><dl><div><dt>脚本片段</dt><dd>{shot.scriptSegment}</dd></div><div><dt>时长</dt><dd>{shot.durationSeconds} 秒</dd></div><div><dt>制作方法</dt><dd>{shot.productionMethod}</dd></div><div><dt>冻结输入</dt><dd>{shot.inputBasis.map((input) => `${input.relativePath} · ${input.sha256.slice(0, 12)}…`).join("、")}</dd></div><div><dt>目标规格</dt><dd>{shot.targetSpec}</dd></div></dl>{shotAnnotations.length ? <div className="storyboard-annotations"><strong>已留批注</strong>{shotAnnotations.map((annotation) => <p key={annotation.id}>{annotation.reason}</p>)}</div> : null}<StoryboardAnnotationForm isPending={isAnnotationPending} onCreateAnnotation={onCreateAnnotation} reviewPackageId={reviewPackage.id} shotId={shot.id} /></article>;
+  })}</section>;
+}
+
+function StoryboardAnnotationForm({ isPending, onCreateAnnotation, reviewPackageId, shotId }: { isPending: boolean; onCreateAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; reviewPackageId: string; shotId: string }) {
+  const [reason, setReason] = useState("");
+  const [error, setError] = useState("");
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      setError("请填写镜头批注。");
+      return;
+    }
+    setError("");
+    try {
+      await onCreateAnnotation({ reviewPackageId, shotId, reason: trimmedReason });
+      setReason("");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "无法添加镜头批注。");
+    }
+  }
+  return <form className="storyboard-annotation-form" onSubmit={(event) => { void submit(event); }}><label>镜头批注<textarea aria-label={`${shotId} 镜头批注`} onChange={(event) => setReason(event.target.value)} rows={2} value={reason} /></label>{error ? <p className="form-error">{error}</p> : null}<button className="button button-secondary" disabled={isPending} type="submit">添加镜头批注</button></form>;
 }
 
 function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {
