@@ -101,6 +101,7 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
     seriesBaseline: seriesBaseline(snapshot),
     reviewFeedback: reviewFeedback(snapshot),
     reviewAnnotations: reviewAnnotations(snapshot),
+    aRoll: aRoll(snapshot),
     allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
     output,
@@ -152,6 +153,30 @@ function reviewAnnotations(snapshot: Record<string, unknown>): WorkerTaskPackage
   });
 }
 
+function aRoll(snapshot: Record<string, unknown>): WorkerTaskPackageInput["aRoll"] {
+  if (snapshot.capability !== "a_roll_generation") return undefined;
+  const executor = snapshot.executor;
+  const shot = snapshot.shot;
+  if (!isRecord(executor) || !isRecord(shot)) throw new Error("A-roll 任务缺少冻结执行器或镜头。");
+  const inputBasis = shot.inputBasis;
+  if (!Array.isArray(inputBasis)) throw new Error("A-roll 任务缺少冻结镜头输入。");
+  return {
+    adapter: requiredString(executor.adapter, "A-roll 任务缺少冻结适配器。"),
+    shot: {
+      id: requiredString(shot.id, "A-roll 任务缺少镜头 ID。"),
+      scriptSegment: requiredString(shot.scriptSegment, "A-roll 任务缺少脚本片段。"),
+      durationSeconds: requiredPositiveNumber(shot.durationSeconds, "A-roll 任务缺少有效时长。"),
+      shotType: requiredShotType(shot.shotType),
+      productionMethod: requiredString(shot.productionMethod, "A-roll 任务缺少制作方法。"),
+      inputBasis: inputBasis.map((input) => {
+        if (!isRecord(input)) throw new Error("A-roll 任务的输入依据格式无效。");
+        return { relativePath: requiredString(input.relativePath, "A-roll 输入依据缺少路径。"), sha256: requiredString(input.sha256, "A-roll 输入依据缺少哈希。") };
+      }),
+      targetSpec: requiredString(shot.targetSpec, "A-roll 任务缺少目标规格。"),
+    },
+  };
+}
+
 function parseCodexOutput(output: string, actualCostCents: number): unknown {
   const parsed: unknown = JSON.parse(output);
   if (!isRecord(parsed)) throw new Error("Codex 必须返回一个 JSON 对象。");
@@ -178,6 +203,16 @@ function inputArtifacts(snapshot: Record<string, unknown>): ArtifactManifest[] {
 
 function requiredString(value: unknown, message: string): string {
   if (typeof value !== "string" || !value.trim()) throw new Error(message);
+  return value;
+}
+
+function requiredPositiveNumber(value: unknown, message: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw new Error(message);
+  return value;
+}
+
+function requiredShotType(value: unknown): "a_roll" | "b_roll" {
+  if (value !== "a_roll" && value !== "b_roll") throw new Error("A-roll 任务镜头类型无效。");
   return value;
 }
 

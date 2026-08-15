@@ -184,6 +184,59 @@ describe("本地 Codex Worker runner", () => {
     expect(verifyArtifacts).toHaveBeenLastCalledWith(expect.any(Object), [expect.objectContaining({ artifactType: "storyboard" })], expect.objectContaining({ version: "storyboard/v1", shots: [expect.objectContaining({ id: "shot-02" })] }));
   });
 
+  it("把冻结的 A-roll 镜头、适配器与输入交给 Worker", async () => {
+    const execute = vi.fn().mockResolvedValue(JSON.stringify({
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "blocked",
+      artifacts: [],
+      validation: { passed: false, checks: [] },
+      actualCostCents: 0,
+      blockers: [{ code: "adapter_unavailable", detail: "The declared adapter is unavailable." }],
+      retry: { shouldRetry: false, reason: "Owner action is required." },
+      nextStep: "Configure the frozen adapter.",
+    }));
+
+    await runCodexWorker({
+      claimNextTask: async () => ({
+        ...claimedTask,
+        taskType: "generate_a_roll",
+        inputSnapshot: {
+          capability: "a_roll_generation",
+          executor: { adapter: "codex", model: "gpt-5.6-luna", prompt_version: "a-roll-v1", provider: "codex" },
+          allowed_tools: ["read", "write"],
+          shot: {
+            id: "shot-01",
+            scriptSegment: "林砚进入古宅。",
+            durationSeconds: 4,
+            shotType: "a_roll",
+            productionMethod: "数字人表演",
+            inputBasis: [
+              { relativePath: "episodes/episode-1/main-script.md", sha256: "a".repeat(64) },
+              { relativePath: "episodes/episode-1/visual-brief.md", sha256: "b".repeat(64) },
+            ],
+            targetSpec: "9:16，1080×1920，24fps",
+          },
+          output: { required_artifact_types: ["a_roll_video"], content_type: "video/mp4", relative_path: "episodes/episode-1/a-roll/shot-01.mp4", review_stage: "production_ready" },
+          input_artifacts: [
+            { artifactType: "main_script", relativePath: "episodes/episode-1/main-script.md", sha256: "a".repeat(64), fileSize: 128 },
+            { artifactType: "visual_brief", relativePath: "episodes/episode-1/visual-brief.md", sha256: "b".repeat(64), fileSize: 128 },
+          ],
+        },
+      }),
+      reportResult: vi.fn().mockResolvedValue(undefined),
+      execute,
+      verifyAssetRoot: async () => undefined,
+      verifyArtifacts: async () => undefined,
+      actualCostCents: 0,
+    });
+
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      aRoll: expect.objectContaining({ adapter: "codex", shot: expect.objectContaining({ id: "shot-01", shotType: "a_roll" }) }),
+      assets: expect.objectContaining({ inputs: [expect.objectContaining({ artifactType: "main_script" }), expect.objectContaining({ artifactType: "visual_brief" })] }),
+    }));
+  });
+
   it("缺少资产根目录时写入 blocked，不调用 Codex", async () => {
     const execute = vi.fn();
     const reportResult = vi.fn().mockResolvedValue(undefined);

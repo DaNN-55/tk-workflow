@@ -50,7 +50,8 @@ async function planWorkerTasks(): Promise<Array<{ id: string }>> {
     orchestrateTasks("orchestrate_provided_script_tasks"),
     orchestrateTasks("orchestrate_storyboard_tasks"),
   ]);
-  return [...visualTasks, ...storyboardTasks];
+  const aRollTasks = await orchestrateTasks("orchestrate_a_roll_tasks");
+  return [...visualTasks, ...storyboardTasks, ...aRollTasks];
 }
 
 async function orchestrateTasks(functionName: string): Promise<Array<{ id: string }>> {
@@ -72,18 +73,17 @@ async function notifyFor(kind: "approval" | "state"): Promise<void> {
   const cursor = await readCursor(cursorFile);
   const events = await fetchAuditEvents(cursor);
   const selection = collectNotifications(events, cursor);
-  const stages = kind === "approval" ? selection.approvalStages : selection.stateStages;
+  const notifications = kind === "approval"
+    ? selection.approvalStages.map((stage) => ({ title: "需要人工审批", body: `有 Episode 进入 ${stage}，请在控制台处理。` }))
+    : [
+      ...selection.stateStages.map((stage) => ({ title: "Episode 状态已变更", body: `有 Episode 进入 ${stage}，请在控制台查看。` })),
+      ...selection.blockerDetails.map((detail) => ({ title: "A-roll 任务已阻塞", body: detail })),
+    ];
 
-  for (const stage of stages) {
-    if (kind === "approval") {
-      await showNotification("需要人工审批", `有 Episode 进入 ${stage}，请在控制台处理。`);
-    } else {
-      await showNotification("Episode 状态已变更", `有 Episode 进入 ${stage}，请在控制台查看。`);
-    }
-  }
+  for (const notification of notifications) await showNotification(notification.title, notification.body);
 
   if (selection.nextCursor) await writeCursor(cursorFile, selection.nextCursor);
-  process.stdout.write(JSON.stringify({ mode: `notify-${kind}`, notifications: stages.length, cursor: selection.nextCursor }) + "\n");
+  process.stdout.write(JSON.stringify({ mode: `notify-${kind}`, notifications: notifications.length, cursor: selection.nextCursor }) + "\n");
 }
 
 async function runHealthCheck(): Promise<void> {
@@ -114,7 +114,7 @@ async function fetchAuditEvents(cursor: NotificationCursor | null): Promise<Audi
   const { url, serviceRoleKey } = supabaseCredentials();
   const endpoint = new URL("/rest/v1/audit_events", url);
   endpoint.searchParams.set("select", "id,created_at,event_type,payload");
-  endpoint.searchParams.set("event_type", "eq.stage_transition");
+  endpoint.searchParams.set("event_type", "in.(stage_transition,a_roll_task_blocked)");
   endpoint.searchParams.set("order", "created_at.asc,id.asc");
   endpoint.searchParams.set("limit", "1000");
   if (cursor) endpoint.searchParams.set("created_at", `gte.${cursor.createdAt}`);

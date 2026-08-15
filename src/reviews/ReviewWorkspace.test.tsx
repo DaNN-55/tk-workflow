@@ -169,6 +169,32 @@ describe("审核台", () => {
     expect(onTransition).toHaveBeenCalledTimes(2);
   });
 
+  it("展示 A-roll 的冻结执行证据和运行状态", () => {
+    const aRollTask: Task = {
+      ...blockedTask,
+      actual_cost_cents: 72,
+      attempt: 1,
+      input_snapshot: {
+        capability: "a_roll_generation",
+        executor: { adapter: "codex", model: "gpt-5.6-luna", prompt_version: "a-roll-v1", provider: "codex" },
+        allowed_tools: ["read", "write"],
+        input_artifacts: [{ artifactType: "main_script", relativePath: "episodes/episode-review/script.md", sha256: "c".repeat(64), fileSize: 100 }],
+        shot: { id: "shot-01" },
+      },
+      max_attempts: 2,
+      status: "running",
+      task_type: "generate_a_roll",
+    };
+
+    render(<EpisodeDetail {...materialInputProps} artifacts={[]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} tasks={[aRollTask]} transitions={[]} />);
+
+    expect(screen.getByRole("heading", { name: "A-roll 生成运行" })).toBeTruthy();
+    expect(screen.getByText("shot-01 · running")).toBeTruthy();
+    expect(screen.getByText("codex · gpt-5.6-luna · a-roll-v1")).toBeTruthy();
+    expect(screen.getByText("72 分")).toBeTruthy();
+    expect(screen.getByText("最新结果：执行中")).toBeTruthy();
+  });
+
   it("以纵向缩略图展示产物，并允许 Owner 放大后关闭预览", async () => {
     const user = userEvent.setup();
 

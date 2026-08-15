@@ -39,6 +39,16 @@ interface WorkerBlocker {
   detail: string;
 }
 
+interface ArollTaskEvidence {
+  adapter: string;
+  allowedTools: string[];
+  inputHashes: string[];
+  model: string;
+  promptVersion: string;
+  provider: string;
+  shotId: string;
+}
+
 interface MaterialImportRequest {
   episodeId: string;
   sourceKind: "directory" | "file" | "paste";
@@ -195,6 +205,17 @@ function blockersFromResult(result: Json | null): WorkerBlocker[] {
     const { code, detail } = blocker;
     return typeof code === "string" && code && typeof detail === "string" && detail ? [{ code, detail }] : [];
   });
+}
+
+function aRollTaskEvidence(task: Task): ArollTaskEvidence | null {
+  const snapshot = task.input_snapshot;
+  if (task.task_type !== "generate_a_roll" || !snapshot || Array.isArray(snapshot) || typeof snapshot !== "object") return null;
+  const { allowed_tools: allowedTools, capability, executor, input_artifacts: inputArtifacts, shot } = snapshot;
+  if (capability !== "a_roll_generation" || !executor || Array.isArray(executor) || typeof executor !== "object" || !shot || Array.isArray(shot) || typeof shot !== "object" || !Array.isArray(allowedTools) || !Array.isArray(inputArtifacts)) return null;
+  if (typeof executor.provider !== "string" || typeof executor.model !== "string" || typeof executor.prompt_version !== "string" || typeof executor.adapter !== "string" || typeof shot.id !== "string" || allowedTools.some((tool) => typeof tool !== "string")) return null;
+  const inputHashes = inputArtifacts.flatMap((artifact) => artifact && !Array.isArray(artifact) && typeof artifact === "object" && typeof artifact.sha256 === "string" ? [artifact.sha256] : []);
+  if (inputHashes.length !== inputArtifacts.length) return null;
+  return { adapter: executor.adapter, allowedTools: allowedTools as string[], inputHashes, model: executor.model, promptVersion: executor.prompt_version, provider: executor.provider, shotId: shot.id };
 }
 
 function isSafeRelativePath(relativePath: string): boolean {
@@ -1079,12 +1100,22 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     <div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div>
     {reviewPackage?.stage !== "visual_review" && reviewPackage?.stage !== "storyboard_review" ? <ArtifactPreview artifacts={episodeArtifacts} /> : null}
     {reviewPackage && reviewArtifact ? reviewPackage.stage === "visual_review" ? <VisualReviewPackage artifact={reviewArtifact} artifacts={reviewArtifacts} reviewPackage={reviewPackage} /> : reviewPackage.stage === "storyboard_review" ? <StoryboardReviewPackage annotations={storyboardAnnotations} artifact={reviewArtifact} isAnnotationPending={isStoryboardAnnotationPending} onCreateAnnotation={onCreateStoryboardAnnotation} onValidationChange={onStoryboardValidationChange} reviewPackage={reviewPackage} /> : <TextReviewPackage artifact={reviewArtifact} reviewPackage={reviewPackage} /> : null}
+    <ArollTaskEvidencePanel tasks={tasks.filter((task) => task.episode_id === episode.id)} />
     <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
     {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
     {reviewAction && isStoryboardReviewValid ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} /> : null}
     {episode.stage === "publishing_review" ? <section className="review-section publication-decision"><h3>发布确认</h3><PublicationConfirmationForm episode={episode} isPending={isTransitionPending} onConfirm={onTransition} ownerId={ownerId} /></section> : null}
     <section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section>
   </>;
+}
+
+function ArollTaskEvidencePanel({ tasks }: { tasks: Task[] }) {
+  const evidenceTasks = tasks.flatMap((task) => {
+    const evidence = aRollTaskEvidence(task);
+    return evidence ? [{ evidence, task }] : [];
+  });
+  if (!evidenceTasks.length) return null;
+  return <section className="review-section"><h3>A-roll 生成运行</h3>{evidenceTasks.map(({ evidence, task }) => <article className="worker-blocker" key={task.id}><strong>{evidence.shotId} · {task.status}</strong><dl><div><dt>执行器</dt><dd>{evidence.provider} · {evidence.model} · {evidence.promptVersion}</dd></div><div><dt>适配器</dt><dd>{evidence.adapter}</dd></div><div><dt>允许工具</dt><dd>{evidence.allowedTools.join("、")}</dd></div><div><dt>冻结输入哈希</dt><dd>{evidence.inputHashes.map((hash) => `${hash.slice(0, 12)}…`).join("、")}</dd></div><div><dt>运行尝试</dt><dd>{task.attempt} / {task.max_attempts}</dd></div><div><dt>实际成本</dt><dd>{task.actual_cost_cents ?? 0} 分</dd></div></dl>{task.last_result ? <p className="muted-copy">最新结果：{task.status === "completed" ? "已完成" : task.status === "running" ? "执行中" : task.status === "ready" ? "等待领取" : "需要 Owner 处理"}</p> : null}</article>)}</section>;
 }
 
 function ScriptCommissionForm({ episodeId, isPending, onCommission }: { episodeId: string; isPending: boolean; onCommission: (input: ScriptCommissionRequest) => Promise<void> }) {

@@ -60,6 +60,10 @@ export interface WorkerTaskPackageInput {
     shotId: string;
     reason: string;
   }>;
+  aRoll?: {
+    adapter: string;
+    shot: StoryboardShotManifest;
+  };
   allowedTools: string[];
   allowedAssetRoot: string;
   output: {
@@ -94,6 +98,10 @@ export interface WorkerTaskPackage {
     shotId: string;
     reason: string;
   }>;
+  aRoll?: {
+    adapter: string;
+    shot: StoryboardShotManifest;
+  };
   allowedTools: readonly string[];
   task: Pick<WorkerTaskPackageInput["task"], "id" | "type">;
   accountId: string;
@@ -149,6 +157,12 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
   if (input.seriesBaseline && (!isNonEmptyString(input.seriesBaseline.versionId) || !Number.isInteger(input.seriesBaseline.version) || input.seriesBaseline.version < 1 || !isRecord(input.seriesBaseline.rules))) throw new Error("seriesBaseline must contain a version and rule object.");
   if (input.reviewFeedback && (!isNonEmptyString(input.reviewFeedback.reviewPackageId) || !isNonEmptyString(input.reviewFeedback.reason))) throw new Error("review feedback must contain its package and reason.");
   if (input.reviewAnnotations?.some((annotation) => !isNonEmptyString(annotation.shotId) || !isNonEmptyString(annotation.reason))) throw new Error("review annotations must contain a shot and reason.");
+  if (input.capability === "a_roll_generation" && !input.aRoll) throw new Error("a-roll generation requires its frozen adapter and shot.");
+  if (input.capability !== "a_roll_generation" && input.aRoll) throw new Error("only a-roll generation may include a frozen shot.");
+  if (input.aRoll) {
+    if (!isNonEmptyString(input.aRoll.adapter)) throw new Error("a-roll generation requires an adapter.");
+    validateStoryboardManifest({ version: "storyboard/v1", shots: [input.aRoll.shot] }, input.inputArtifacts);
+  }
   if (input.allowedTools.some((tool) => !isNonEmptyString(tool))) throw new Error("allowedTools must contain non-empty names.");
   if (input.output.requiredArtifactTypes.length === 0 || input.output.requiredArtifactTypes.some((artifactType) => !isNonEmptyString(artifactType))) throw new Error("至少需要一个输出产物类型。");
   if (!isNonEmptyString(input.output.contentType) || !isNonEmptyString(input.output.reviewStage) || !isSafeRelativePath(input.output.relativePath)) throw new Error("输出契约缺少有效的内容类型、路径或审核阶段。");
@@ -165,6 +179,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     ...(input.seriesBaseline ? { seriesBaseline: { versionId: input.seriesBaseline.versionId, version: input.seriesBaseline.version, rules: input.seriesBaseline.rules } } : {}),
     ...(input.reviewFeedback ? { reviewFeedback: { reviewPackageId: input.reviewFeedback.reviewPackageId, reason: input.reviewFeedback.reason } } : {}),
     ...(input.reviewAnnotations?.length ? { reviewAnnotations: input.reviewAnnotations.map((annotation) => ({ shotId: annotation.shotId, reason: annotation.reason })) } : {}),
+    ...(input.aRoll ? { aRoll: { adapter: input.aRoll.adapter, shot: input.aRoll.shot } } : {}),
     allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
     accountId: input.episode.accountId,
