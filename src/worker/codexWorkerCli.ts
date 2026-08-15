@@ -15,12 +15,14 @@ import { nonNegativeIntegerEnvironment, requiredEnvironment } from "./runtimeEnv
 import { verifyReportedStoryboardArtifact } from "./storyboardArtifact.js";
 import { workerResultJsonSchema } from "./workerResultSchema.js";
 import { executeControlledMediaTask } from "./controlledMediaExecutor.js";
+import { readTaskIdArgument } from "./taskClaimArguments.js";
 
 const supabaseUrl = requiredEnvironment("SUPABASE_URL");
 const serviceRoleKey = requiredEnvironment("SUPABASE_SERVICE_ROLE_KEY");
 const actualCostCents = nonNegativeIntegerEnvironment("CODEX_WORKER_ACTUAL_COST_CENTS");
 const mediaLibraryMountPath = requiredEnvironment("MEDIA_LIBRARY_MOUNT_PATH");
 const mediaLibraryMinimumFreeBytes = nonNegativeIntegerEnvironment("MEDIA_LIBRARY_MIN_FREE_BYTES");
+const requestedTaskId = readTaskIdArgument(process.argv.slice(2));
 const supabase = createClient(supabaseUrl, serviceRoleKey, { auth: { persistSession: false } });
 
 const result = await runCodexWorker({
@@ -35,7 +37,7 @@ const result = await runCodexWorker({
 process.stdout.write(`${JSON.stringify(result)}\n`);
 
 async function claimNextTask(): Promise<ClaimedWorkerTask | null> {
-  const { data, error } = await supabase.rpc("claim_next_worker_task");
+  const { data, error } = await supabase.rpc("claim_next_worker_task", requestedTaskId ? { p_task_id: requestedTaskId } : {});
   if (error) throw new Error(`Unable to claim a worker task: ${error.message}`);
   const row = data?.[0];
   if (!row) return null;

@@ -39,12 +39,13 @@ async function dispatchTask(): Promise<void> {
   if (scopedEpisodeId) {
     const plannedTasks = await planScopedMediaTasks(scopedEpisodeId);
     const workers: unknown[] = [];
-    for (let index = 0; index < plannedTasks.length; index += 1) {
-      const workerResult = await runCommand("npm", ["run", "worker:run"], projectRoot);
+    for (const plannedTask of plannedTasks) {
+      const workerResult = await runCommand("npm", ["run", "worker:run", "--", "--task-id", plannedTask.id], projectRoot);
       workers.push(parseLastJsonLine(workerResult.stdout));
     }
     const productionReadyEpisodes = await orchestrateTasks("advance_production_ready_episodes", { p_episode_id: scopedEpisodeId });
-    process.stdout.write(`${JSON.stringify({ mode: "dispatch", episodeId: scopedEpisodeId, plannedTasks: plannedTasks.length, workers, productionReadyEpisodes: productionReadyEpisodes.length })}\n`);
+    const preRenderPackages = await orchestrateTasks("create_pre_render_review_packages_for_episode", { p_episode_id: scopedEpisodeId });
+    process.stdout.write(`${JSON.stringify({ mode: "dispatch", episodeId: scopedEpisodeId, plannedTasks: plannedTasks.length, workers, productionReadyEpisodes: productionReadyEpisodes.length, preRenderReviewPackages: preRenderPackages.length })}\n`);
     return;
   }
 
