@@ -32,6 +32,11 @@ describe("HyperFrames 审核渲染工程", () => {
     expect(html).toContain("caption-minimal");
     expect(html).toContain("object-fit:contain");
     expect(html).toContain("bottom:780px");
-    expect(html).not.toContain("document.querySelectorAll('.shot')");
+    expect(html).toContain("scale:1.025");
+    expect(html).not.toContain("tl.from(node,{opacity:0,duration:.35},start)");
+
+    const fadedHtml = projectHtml({ ...taskPackage, reviewRender: { ...taskPackage.reviewRender!, adjustments: { ...taskPackage.reviewRender!.adjustments, transition: "fade", pacing: "compact" } } });
+    expect(fadedHtml).toContain("tl.from(node,{opacity:0,duration:.35},start).to(node,{opacity:0,duration:.35},start+duration-.35)");
+    expect(fadedHtml).toContain("scale:1.08");
   });
 });

@@ -435,6 +435,30 @@ describe("审核台", () => {
     expect(onTransition).toHaveBeenLastCalledWith(visualEpisode.id, "visual_draft", "视觉方向清晰，符合主脚本。");
   });
 
+  it("回填并保存当前审核渲染的合成配置，只提交新的渲染修订", async () => {
+    const user = userEvent.setup();
+    const onRequestReviewRenderRevision = vi.fn().mockResolvedValue(true);
+    const qcEpisode: Episode = { ...reviewEpisode, id: "episode-qc", stage: "qc_review", title: "合成调整" };
+    const renderArtifact: Artifact = { ...previewArtifact, episode_id: qcEpisode.id, artifact_type: "render", id: "artifact-qc-render", producer_task_id: "task-qc-render", relative_path: "episodes/episode-qc/review-render/v2/review-render.mp4" };
+    const qcPackage = {
+      artifact_id: renderArtifact.id,
+      context_snapshot: { review_kind: "hyperframes_review_render", pre_render_review_package_id: "pre-render-package", project_revision: "2", project_relative_path: "episodes/episode-qc/review-render/v2/index.html", composition_adjustments: { caption_style: "minimal", pacing: "gentle", crop: "contain", transition: "cut", layout: "center" }, technical_evidence: { checks: [] } },
+      created_at: "2026-08-15T00:00:00.000Z", episode_id: qcEpisode.id, id: "review-package-qc-2", invalidated_at: null, invalidated_reason: null, revision_number: 2, stage: "qc_review" as const, task_id: "task-qc-render", task_run_id: "task-run-qc-render",
+    };
+    const props = { ...materialInputProps, artifacts: [renderArtifact], blueprint, episode: qcEpisode, isDirectoryPending: false, isTransitionPending: false, onCreateLocalDirectory: vi.fn(), onRequestReviewRenderRevision, onTransition: vi.fn(), reviewPackages: [qcPackage], tasks: [], transitions: [] };
+    const { rerender } = render(<EpisodeDetail {...props} />);
+
+    expect((screen.getByLabelText("字幕风格") as HTMLSelectElement).value).toBe("minimal");
+    expect((screen.getByLabelText("画面裁切") as HTMLSelectElement).value).toBe("contain");
+    await user.selectOptions(screen.getByLabelText("字幕风格"), "cinematic");
+    await user.type(screen.getByLabelText("调整原因"), "字幕需要更醒目。");
+    rerender(<EpisodeDetail {...props} />);
+    expect((screen.getByLabelText("字幕风格") as HTMLSelectElement).value).toBe("cinematic");
+
+    await user.click(screen.getByRole("button", { name: "按此配置重渲染" }));
+    expect(onRequestReviewRenderRevision).toHaveBeenCalledWith({ reviewPackageId: qcPackage.id, captionStyle: "cinematic", pacing: "gentle", crop: "contain", transition: "cut", layout: "center", reason: "字幕需要更醒目。" });
+  });
+
   it("按镜头审核冻结分镜、保存批注，并执行批准或返工", async () => {
     const user = userEvent.setup();
     const onCreateStoryboardAnnotation = vi.fn().mockResolvedValue(undefined);

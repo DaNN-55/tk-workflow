@@ -48,6 +48,17 @@ interface ReviewRenderRevisionRequest {
   reason: string;
 }
 
+type ReviewRenderAdjustmentDraft = Omit<ReviewRenderRevisionRequest, "reviewPackageId" | "reason">;
+type ReviewDecisionDraft = Partial<ReviewRenderAdjustmentDraft> & { reason: string };
+
+const defaultReviewRenderAdjustments: ReviewRenderAdjustmentDraft = {
+  captionStyle: "cinematic",
+  pacing: "standard",
+  crop: "cover",
+  transition: "fade",
+  layout: "lower_third",
+};
+
 interface WorkerBlocker {
   code: string;
   detail: string;
@@ -216,6 +227,15 @@ function policyAssetRoot(policy: Json) {
 
 function reviewActionFor(stage: EpisodeStage): ReviewAction | null {
   return reviewActions[stage] ?? null;
+}
+
+function reviewRenderAdjustmentsFromContext(value: Json): ReviewRenderAdjustmentDraft {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !("composition_adjustments" in value)) return defaultReviewRenderAdjustments;
+  const adjustments = value.composition_adjustments;
+  if (!adjustments || typeof adjustments !== "object" || Array.isArray(adjustments)) return defaultReviewRenderAdjustments;
+  const { caption_style, pacing, crop, transition, layout } = adjustments;
+  if ((caption_style !== "cinematic" && caption_style !== "minimal") || (pacing !== "gentle" && pacing !== "standard" && pacing !== "compact") || (crop !== "cover" && crop !== "contain") || (transition !== "fade" && transition !== "cut") || (layout !== "lower_third" && layout !== "center")) return defaultReviewRenderAdjustments;
+  return { captionStyle: caption_style, pacing, crop, transition, layout };
 }
 
 function currentReviewPackage(reviewPackages: ReviewPackage[], episode: Episode): ReviewPackage | null {
@@ -1213,7 +1233,7 @@ export function EpisodeDetail({ artifacts, audioTrackAnnotations, audioTracks, b
     <AudioTrackPanel annotations={audioTrackAnnotations.filter((annotation) => audioTracks.some((track) => track.episode_id === episode.id && track.id === annotation.audio_track_id))} onCreateAnnotation={onCreateAudioTrackAnnotation} tasks={tasks.filter((task) => task.episode_id === episode.id)} tracks={audioTracks.filter((track) => track.episode_id === episode.id)} />
     <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
     {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.taskId}-${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
-    {reviewAction && isStoryboardReviewValid ? <ReviewActions episode={episode} isPending={isTransitionPending} onRequestReviewRenderRevision={onRequestReviewRenderRevision} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} reviewPackageId={reviewPackage?.id ?? null} /> : null}
+    {reviewAction && isStoryboardReviewValid ? <ReviewActions episode={episode} initialReviewRenderAdjustments={reviewRenderAdjustmentsFromContext(reviewPackage?.context_snapshot ?? {})} isPending={isTransitionPending} onRequestReviewRenderRevision={onRequestReviewRenderRevision} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} reviewPackageId={reviewPackage?.id ?? null} /> : null}
     {episode.stage === "publishing_review" ? <section className="review-section publication-decision"><h3>发布确认</h3><PublicationConfirmationForm episode={episode} isPending={isTransitionPending} onConfirm={onTransition} ownerId={ownerId} /></section> : null}
     <section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section>
   </>;
@@ -1650,26 +1670,34 @@ function useLocalArtifactBlob(source: string | null) {
   return { error, url };
 }
 
-function ReviewActions({ episode, isPending, onRequestReviewRenderRevision, onTransition, ownerId, reviewAction, reviewPackageId }: { episode: Episode; isPending: boolean; onRequestReviewRenderRevision: (input: ReviewRenderRevisionRequest) => Promise<boolean>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; ownerId: string; reviewAction: ReviewAction; reviewPackageId: string | null }) {
-  const [draft, setDraft] = useState(() => readOperationDraft<{ reason: string }>(ownerId, episode.id, "review-decision"));
+function ReviewActions({ episode, initialReviewRenderAdjustments, isPending, onRequestReviewRenderRevision, onTransition, ownerId, reviewAction, reviewPackageId }: { episode: Episode; initialReviewRenderAdjustments: ReviewRenderAdjustmentDraft; isPending: boolean; onRequestReviewRenderRevision: (input: ReviewRenderRevisionRequest) => Promise<boolean>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; ownerId: string; reviewAction: ReviewAction; reviewPackageId: string | null }) {
+  const [draft, setDraft] = useState(() => readOperationDraft<ReviewDecisionDraft>(ownerId, episode.id, "review-decision"));
   const [reason, setReason] = useState(draft?.reason ?? "");
   const [error, setError] = useState("");
-  const [captionStyle, setCaptionStyle] = useState<ReviewRenderRevisionRequest["captionStyle"]>("cinematic");
-  const [pacing, setPacing] = useState<ReviewRenderRevisionRequest["pacing"]>("standard");
-  const [crop, setCrop] = useState<ReviewRenderRevisionRequest["crop"]>("cover");
-  const [transitionStyle, setTransitionStyle] = useState<ReviewRenderRevisionRequest["transition"]>("fade");
-  const [layout, setLayout] = useState<ReviewRenderRevisionRequest["layout"]>("lower_third");
+  const [captionStyle, setCaptionStyle] = useState<ReviewRenderAdjustmentDraft["captionStyle"]>(draft?.captionStyle ?? initialReviewRenderAdjustments.captionStyle);
+  const [pacing, setPacing] = useState<ReviewRenderAdjustmentDraft["pacing"]>(draft?.pacing ?? initialReviewRenderAdjustments.pacing);
+  const [crop, setCrop] = useState<ReviewRenderAdjustmentDraft["crop"]>(draft?.crop ?? initialReviewRenderAdjustments.crop);
+  const [transitionStyle, setTransitionStyle] = useState<ReviewRenderAdjustmentDraft["transition"]>(draft?.transition ?? initialReviewRenderAdjustments.transition);
+  const [layout, setLayout] = useState<ReviewRenderAdjustmentDraft["layout"]>(draft?.layout ?? initialReviewRenderAdjustments.layout);
   const isReviewRenderRevision = episode.stage === "qc_review" && reviewAction.requestChangesStage === "render_ready";
 
   useEffect(() => {
-    const next = readOperationDraft<{ reason: string }>(ownerId, episode.id, "review-decision");
+    const next = readOperationDraft<ReviewDecisionDraft>(ownerId, episode.id, "review-decision");
     setDraft(next);
     setReason(next?.reason ?? "");
+    setCaptionStyle(next?.captionStyle ?? initialReviewRenderAdjustments.captionStyle);
+    setPacing(next?.pacing ?? initialReviewRenderAdjustments.pacing);
+    setCrop(next?.crop ?? initialReviewRenderAdjustments.crop);
+    setTransitionStyle(next?.transition ?? initialReviewRenderAdjustments.transition);
+    setLayout(next?.layout ?? initialReviewRenderAdjustments.layout);
     setError("");
-  }, [episode.id, ownerId]);
+  }, [episode.id, initialReviewRenderAdjustments, ownerId, reviewPackageId]);
 
-  function changeReason(nextReason: string) { setReason(nextReason); if (nextReason.trim()) { const next = { reason: nextReason }; writeOperationDraft(ownerId, episode.id, "review-decision", next); setDraft(next); } else { clearOperationDraft(ownerId, episode.id, "review-decision"); setDraft(null); } }
-  function clearDraft() { clearOperationDraft(ownerId, episode.id, "review-decision"); setDraft(null); setReason(""); }
+  function saveDraft(next: ReviewDecisionDraft) { if (next.reason.trim() || isReviewRenderRevision) { writeOperationDraft(ownerId, episode.id, "review-decision", next); setDraft(next); } else { clearOperationDraft(ownerId, episode.id, "review-decision"); setDraft(null); } }
+  function currentDraft(next: Partial<ReviewDecisionDraft> = {}): ReviewDecisionDraft { return { reason, captionStyle, pacing, crop, transition: transitionStyle, layout, ...next }; }
+  function changeReason(nextReason: string) { setReason(nextReason); saveDraft(currentDraft({ reason: nextReason })); }
+  function changeAdjustments(next: Partial<ReviewRenderAdjustmentDraft>) { if (next.captionStyle) setCaptionStyle(next.captionStyle); if (next.pacing) setPacing(next.pacing); if (next.crop) setCrop(next.crop); if (next.transition) setTransitionStyle(next.transition); if (next.layout) setLayout(next.layout); saveDraft(currentDraft(next)); }
+  function clearDraft() { clearOperationDraft(ownerId, episode.id, "review-decision"); setDraft(null); setReason(""); setCaptionStyle(initialReviewRenderAdjustments.captionStyle); setPacing(initialReviewRenderAdjustments.pacing); setCrop(initialReviewRenderAdjustments.crop); setTransitionStyle(initialReviewRenderAdjustments.transition); setLayout(initialReviewRenderAdjustments.layout); }
 
   async function transition(toStage: EpisodeStage) {
     const trimmedReason = reason.trim();
@@ -1687,7 +1715,7 @@ function ReviewActions({ episode, isPending, onRequestReviewRenderRevision, onTr
     if (await onTransition(episode.id, toStage, trimmedReason)) clearDraft();
   }
 
-  return <section className="review-section review-decision"><h3>Owner 审批</h3>{isReviewRenderRevision ? <fieldset className="composition-adjustments"><legend>仅调整合成层</legend><p className="muted-copy">会生成新的 HyperFrames 工程与审核渲染；已批准的镜头媒体和音轨不会重新生成或重新审批。</p><label>字幕风格<select aria-label="字幕风格" onChange={(event) => setCaptionStyle(event.target.value as ReviewRenderRevisionRequest["captionStyle"])} value={captionStyle}><option value="cinematic">电影感</option><option value="minimal">极简</option></select></label><label>节奏<select aria-label="合成节奏" onChange={(event) => setPacing(event.target.value as ReviewRenderRevisionRequest["pacing"])} value={pacing}><option value="gentle">舒缓</option><option value="standard">标准</option><option value="compact">紧凑</option></select></label><label>裁切<select aria-label="画面裁切" onChange={(event) => setCrop(event.target.value as ReviewRenderRevisionRequest["crop"])} value={crop}><option value="cover">铺满</option><option value="contain">完整显示</option></select></label><label>转场<select aria-label="镜头转场" onChange={(event) => setTransitionStyle(event.target.value as ReviewRenderRevisionRequest["transition"])} value={transitionStyle}><option value="fade">柔和淡入淡出</option><option value="cut">直接切换</option></select></label><label>字幕布局<select aria-label="字幕布局" onChange={(event) => setLayout(event.target.value as ReviewRenderRevisionRequest["layout"])} value={layout}><option value="lower_third">下方字幕</option><option value="center">居中字幕</option></select></label></fieldset> : null}<label>{isReviewRenderRevision ? "调整原因" : "审批理由"}<textarea aria-label={isReviewRenderRevision ? "调整原因" : "审批理由"} onChange={(event) => changeReason(event.target.value)} placeholder={isReviewRenderRevision ? "说明本次合成调整的原因" : "说明批准或要求修改的原因"} rows={3} value={reason} /></label>{draft ? <OperationDraftNotice onClear={clearDraft} /> : null}{error ? <p className="form-error">{error}</p> : null}<div className="review-actions"><button className="button button-primary" disabled={isPending} onClick={() => void transition(reviewAction.approveStage)} type="button">批准</button><button className="button button-secondary" disabled={isPending} onClick={() => void transition(reviewAction.requestChangesStage)} type="button">{isReviewRenderRevision ? "按此配置重渲染" : "要求修改"}</button></div></section>;
+  return <section className="review-section review-decision"><h3>Owner 审批</h3>{isReviewRenderRevision ? <fieldset className="composition-adjustments"><legend>仅调整合成层</legend><p className="muted-copy">会生成新的 HyperFrames 工程与审核渲染；已批准的镜头媒体和音轨不会重新生成或重新审批。</p><label>字幕风格<select aria-label="字幕风格" onChange={(event) => changeAdjustments({ captionStyle: event.target.value as ReviewRenderAdjustmentDraft["captionStyle"] })} value={captionStyle}><option value="cinematic">电影感</option><option value="minimal">极简</option></select></label><label>镜头动效节奏<select aria-label="合成节奏" onChange={(event) => changeAdjustments({ pacing: event.target.value as ReviewRenderAdjustmentDraft["pacing"] })} value={pacing}><option value="gentle">舒缓</option><option value="standard">标准</option><option value="compact">紧凑</option></select></label><label>裁切<select aria-label="画面裁切" onChange={(event) => changeAdjustments({ crop: event.target.value as ReviewRenderAdjustmentDraft["crop"] })} value={crop}><option value="cover">铺满</option><option value="contain">完整显示</option></select></label><label>转场<select aria-label="镜头转场" onChange={(event) => changeAdjustments({ transition: event.target.value as ReviewRenderAdjustmentDraft["transition"] })} value={transitionStyle}><option value="fade">柔和淡入淡出</option><option value="cut">直接切换</option></select></label><label>字幕布局<select aria-label="字幕布局" onChange={(event) => changeAdjustments({ layout: event.target.value as ReviewRenderAdjustmentDraft["layout"] })} value={layout}><option value="lower_third">下方字幕</option><option value="center">居中字幕</option></select></label></fieldset> : null}<label>{isReviewRenderRevision ? "调整原因" : "审批理由"}<textarea aria-label={isReviewRenderRevision ? "调整原因" : "审批理由"} onChange={(event) => changeReason(event.target.value)} placeholder={isReviewRenderRevision ? "说明本次合成调整的原因" : "说明批准或要求修改的原因"} rows={3} value={reason} /></label>{draft ? <OperationDraftNotice onClear={clearDraft} /> : null}{error ? <p className="form-error">{error}</p> : null}<div className="review-actions"><button className="button button-primary" disabled={isPending} onClick={() => void transition(reviewAction.approveStage)} type="button">批准</button><button className="button button-secondary" disabled={isPending} onClick={() => void transition(reviewAction.requestChangesStage)} type="button">{isReviewRenderRevision ? "按此配置重渲染" : "要求修改"}</button></div></section>;
 }
 
 function OperationDraftNotice({ isRestored = false, onClear }: { isRestored?: boolean; onClear: () => void }) { return <div className="operation-draft-notice" role="status"><span>{isRestored ? "已恢复本地草稿" : "本地草稿已保存"}</span><button className="text-button" onClick={onClear} type="button">清除草稿</button></div>; }
