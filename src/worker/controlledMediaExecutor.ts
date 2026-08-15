@@ -104,19 +104,24 @@ function freesoundSource(source: FreesoundPreview): NonNullable<WorkerResult["me
 }
 
 async function writePrimaryArtifact(taskPackage: WorkerTaskPackage, bytes: Uint8Array): Promise<ArtifactManifest> {
-  const destination = await safeOutputPath(taskPackage.assets.allowedRoot, taskPackage.output.relativePath);
-  const handle = await open(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-  try {
-    await handle.writeFile(bytes);
-  } finally {
-    await handle.close();
-  }
+  await writeSafeAssetFile(taskPackage.assets.allowedRoot, taskPackage.output.relativePath, bytes);
   return {
     artifactType: taskPackage.output.requiredArtifactTypes[0],
     relativePath: taskPackage.output.relativePath,
     sha256: createHash("sha256").update(bytes).digest("hex"),
     fileSize: bytes.byteLength,
   };
+}
+
+export async function writeSafeAssetFile(allowedRoot: string, relativePath: string, bytes: Uint8Array | string): Promise<string> {
+  const destination = await safeAssetOutputPath(allowedRoot, relativePath);
+  const handle = await open(destination, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
+  try {
+    await handle.writeFile(bytes);
+  } finally {
+    await handle.close();
+  }
+  return destination;
 }
 
 async function validateTemporaryMedia(input: Parameters<typeof executeControlledMediaTask>[0], bytes: Uint8Array): Promise<number | undefined> {
@@ -135,7 +140,7 @@ async function validateTemporaryMedia(input: Parameters<typeof executeControlled
   }
 }
 
-async function safeOutputPath(allowedRoot: string, relativePath: string): Promise<string> {
+export async function safeAssetOutputPath(allowedRoot: string, relativePath: string): Promise<string> {
   const assetRoot = await realpath(resolve(allowedRoot));
   const destination = resolve(assetRoot, relativePath);
   const fromRoot = relative(assetRoot, destination);

@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
-import { copyFile, lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
-import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
+import { readFile, realpath } from "node:fs/promises";
+import { basename, dirname, extname, isAbsolute, relative, resolve } from "node:path";
 import type { ArtifactManifest, StoryboardShotManifest, WorkerResult, WorkerTaskPackage } from "./contracts.js";
+import { safeAssetOutputPath, writeSafeAssetFile } from "./controlledMediaExecutor.js";
 
 export async function executeHyperframesReviewRender(input: {
   taskPackage: WorkerTaskPackage;
@@ -11,10 +11,10 @@ export async function executeHyperframesReviewRender(input: {
 }): Promise<string> {
   const render = input.taskPackage.reviewRender;
   if (!render) throw new Error("审核渲染任务缺少冻结工程。");
-  const projectPath = await safeOutputPath(input.taskPackage.assets.allowedRoot, render.projectRelativePath);
-  const outputPath = await safeOutputPath(input.taskPackage.assets.allowedRoot, input.taskPackage.output.relativePath);
-  await copyFrozenProjectAssets(input.taskPackage, projectPath);
-  await writeFileSafely(projectPath, projectHtml(input.taskPackage));
+  const projectPath = await safeAssetOutputPath(input.taskPackage.assets.allowedRoot, render.projectRelativePath);
+  const outputPath = await safeAssetOutputPath(input.taskPackage.assets.allowedRoot, input.taskPackage.output.relativePath);
+  await copyFrozenProjectAssets(input.taskPackage);
+  await writeSafeAssetFile(input.taskPackage.assets.allowedRoot, render.projectRelativePath, projectHtml(input.taskPackage));
   const projectDirectory = dirname(projectPath);
   await input.run("hyperframes", ["check", projectDirectory]);
   await input.run("hyperframes", ["render", projectDirectory, "--quality", "standard", "--strict", "--no-best-effort", "--output", outputPath]);
@@ -71,34 +71,15 @@ async function artifact(artifactType: string, relativePath: string, path: string
   return { artifactType, relativePath, sha256: createHash("sha256").update(bytes).digest("hex"), fileSize: bytes.byteLength };
 }
 
-async function safeOutputPath(allowedRoot: string, relativePath: string): Promise<string> {
-  const assetRoot = await realpath(resolve(allowedRoot));
-  const destination = resolve(assetRoot, relativePath);
-  const fromRoot = relative(assetRoot, destination);
-  if (isAbsolute(fromRoot) || fromRoot.startsWith("..")) throw new Error("审核渲染输出路径越出资产根目录。");
-  await mkdir(dirname(destination), { recursive: true });
-  const details = await lstat(dirname(destination));
-  if (!details.isDirectory() || details.isSymbolicLink()) throw new Error("审核渲染输出目录无效。");
-  try { if ((await lstat(destination)).isSymbolicLink()) throw new Error("审核渲染输出文件不能是符号链接。"); } catch (error) { if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") throw error; }
-  return destination;
-}
-
-async function writeFileSafely(path: string, content: string): Promise<void> {
-  const handle = await open(path, constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW, 0o600);
-  try { await handle.writeFile(content); } finally { await handle.close(); }
-}
-
-async function copyFrozenProjectAssets(taskPackage: WorkerTaskPackage, projectPath: string): Promise<void> {
-  const projectAssets = join(dirname(projectPath), "assets");
-  await mkdir(projectAssets, { recursive: true });
+async function copyFrozenProjectAssets(taskPackage: WorkerTaskPackage): Promise<void> {
   const assetRoot = await realpath(resolve(taskPackage.assets.allowedRoot));
   for (const member of taskPackage.reviewRender?.members ?? []) {
     const source = resolve(assetRoot, member.relativePath);
     const fromRoot = relative(assetRoot, source);
     if (isAbsolute(fromRoot) || fromRoot.startsWith("..")) throw new Error("冻结媒体输入越出资产根目录。");
-    await copyFile(source, join(projectAssets, assetFilename(member.relativePath)));
+    await writeSafeAssetFile(taskPackage.assets.allowedRoot, `${dirname(taskPackage.reviewRender?.projectRelativePath ?? "")}/assets/${assetFilename(member.relativePath)}`, await readFile(source));
   }
-  await copyFile(resolve(process.cwd(), "node_modules", "gsap", "dist", "gsap.min.js"), join(projectAssets, "gsap.min.js"));
+  await writeSafeAssetFile(taskPackage.assets.allowedRoot, `${dirname(taskPackage.reviewRender?.projectRelativePath ?? "")}/assets/gsap.min.js`, await readFile(resolve(process.cwd(), "node_modules", "gsap", "dist", "gsap.min.js")));
 }
 
 function assetFilename(relativePath: string): string { return `${createHash("sha256").update(relativePath).digest("hex")}${extname(basename(relativePath))}`; }
