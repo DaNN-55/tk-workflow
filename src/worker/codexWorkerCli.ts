@@ -15,6 +15,7 @@ import { nonNegativeIntegerEnvironment, requiredEnvironment } from "./runtimeEnv
 import { verifyReportedStoryboardArtifact } from "./storyboardArtifact.js";
 import { workerResultJsonSchema } from "./workerResultSchema.js";
 import { executeControlledMediaTask } from "./controlledMediaExecutor.js";
+import { executeHyperframesReviewRender } from "./hyperframesReviewRenderer.js";
 import { readTaskIdArgument } from "./taskClaimArguments.js";
 
 const supabaseUrl = requiredEnvironment("SUPABASE_URL");
@@ -41,7 +42,7 @@ async function claimNextTask(): Promise<ClaimedWorkerTask | null> {
   if (error) throw new Error(`Unable to claim a worker task: ${error.message}`);
   const row = data?.[0];
   if (!row) return null;
-  if (row.provider !== "codex" && row.provider !== "google_tts" && row.provider !== "pexels" && row.provider !== "ffmpeg" && row.provider !== "freesound") throw new Error(`Unsupported worker provider: ${row.provider}`);
+  if (row.provider !== "codex" && row.provider !== "google_tts" && row.provider !== "pexels" && row.provider !== "ffmpeg" && row.provider !== "freesound" && row.provider !== "hyperframes") throw new Error(`Unsupported worker provider: ${row.provider}`);
 
   return {
     taskId: row.task_id,
@@ -63,6 +64,7 @@ async function claimNextTask(): Promise<ClaimedWorkerTask | null> {
 
 async function executeTask(taskPackage: WorkerTaskPackage): Promise<string> {
   if (taskPackage.provider === "codex") return executeCodex(taskPackage);
+  if (taskPackage.provider === "hyperframes") return executeHyperframesReviewRender({ taskPackage, run: runCommand, validateMp4: validateMp4Artifact });
   return executeControlledMediaTask({
     taskPackage,
     fetcher: fetch,

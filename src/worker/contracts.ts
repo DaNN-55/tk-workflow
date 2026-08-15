@@ -42,7 +42,7 @@ export interface WorkerTaskPackageInput {
     attempt: number;
     budgetLimitCents: number;
     maxAttempts: number;
-    provider: "codex" | "google_tts" | "pexels" | "ffmpeg" | "freesound";
+    provider: "codex" | "google_tts" | "pexels" | "ffmpeg" | "freesound" | "hyperframes";
     model: string;
     promptVersion: string;
   };
@@ -105,6 +105,20 @@ export interface WorkerTaskPackageInput {
         cue: StoryboardAudioCue;
       };
     };
+  reviewRender?: {
+    projectRelativePath: string;
+    projectRevision: number;
+    preRenderReviewPackageId: string;
+    storyboard: StoryboardManifest;
+    members: Array<{
+      memberKey: string;
+      memberKind: "shot_media" | "narration" | "soundtrack";
+      relativePath: string;
+      sha256: string;
+      startSeconds: number;
+      durationSeconds: number;
+    }>;
+  };
   allowedTools: string[];
   allowedAssetRoot: string;
   output: {
@@ -144,6 +158,7 @@ export interface WorkerTaskPackage {
     shot: StoryboardShotManifest;
   };
   media?: WorkerTaskPackageInput["media"];
+  reviewRender?: WorkerTaskPackageInput["reviewRender"];
   allowedTools: readonly string[];
   task: Pick<WorkerTaskPackageInput["task"], "id" | "type">;
   accountId: string;
@@ -225,6 +240,17 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
   if (input.capability === "b_roll_generation" && (!input.media || input.media.adapter !== "pexels_video")) throw new Error("B-roll 生成必须包含冻结的 Pexels 配置。");
   if (input.capability === "embedded_audio_extraction" && (!input.media || input.media.adapter !== "ffmpeg_extract_audio")) throw new Error("派生音频提取必须包含冻结的视频输入。");
   if (input.capability === "soundtrack_generation" && (!input.media || input.media.adapter !== "freesound_preview")) throw new Error("声轨生成必须包含冻结的 Freesound 配置。");
+  if (input.capability === "review_rendering" && !input.reviewRender) throw new Error("审核渲染必须包含冻结的合成工程。 ");
+  if (input.capability !== "review_rendering" && input.reviewRender) throw new Error("只有审核渲染任务可以包含合成工程。 ");
+  if (input.reviewRender) {
+    if (input.task.provider !== "hyperframes") throw new Error("审核渲染任务 Provider 必须是 HyperFrames。 ");
+    const render = input.reviewRender;
+    if (!isSafeRelativePath(render.projectRelativePath) || !isNonEmptyString(render.preRenderReviewPackageId) || !Number.isInteger(render.projectRevision) || render.projectRevision < 1 || render.members.length === 0) throw new Error("冻结审核渲染工程格式无效。 ");
+    validateReviewRenderStoryboard(render.storyboard);
+    for (const member of render.members) {
+      if (!isNonEmptyString(member.memberKey) || (member.memberKind !== "shot_media" && member.memberKind !== "narration" && member.memberKind !== "soundtrack") || !isSafeRelativePath(member.relativePath) || !isSha256(member.sha256) || !isNonNegativeNumber(member.startSeconds) || !isPositiveFiniteNumber(member.durationSeconds) || !input.inputArtifacts.some((artifact) => artifact.relativePath === member.relativePath && artifact.sha256 === member.sha256)) throw new Error("冻结审核渲染成员格式无效。 ");
+    }
+  }
   if (input.media?.adapter === "google_tts") {
     if (input.task.provider !== "google_tts") throw new Error("旁白任务 Provider 必须与冻结 Google TTS 适配器匹配。");
     const { narration } = input.media;
@@ -266,6 +292,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     ...(input.reviewAnnotations?.length ? { reviewAnnotations: input.reviewAnnotations.map((annotation) => ({ shotId: annotation.shotId, reason: annotation.reason })) } : {}),
     ...(input.aRoll ? { aRoll: { adapter: input.aRoll.adapter, shot: input.aRoll.shot } } : {}),
     ...(input.media ? { media: input.media } : {}),
+    ...(input.reviewRender ? { reviewRender: { ...input.reviewRender, members: input.reviewRender.members.map((member) => ({ ...member })) } } : {}),
     allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
     accountId: input.episode.accountId,
@@ -382,6 +409,10 @@ export function validateStoryboardManifest(value: unknown, frozenInputs: Artifac
 
 function validateStoryboardAudioCue(value: unknown): asserts value is StoryboardAudioCue {
   if (!isRecord(value) || !isNonEmptyString(value.id) || (value.kind !== "bgm" && value.kind !== "sfx") || !isNonEmptyString(value.description) || !isNonEmptyString(value.searchQuery) || value.searchQuery.length > 100 || !isNonNegativeNumber(value.startSeconds) || !isPositiveFiniteNumber(value.durationSeconds)) throw new Error("分镜声轨声明格式无效。");
+}
+
+function validateReviewRenderStoryboard(value: StoryboardManifest): void {
+  if (value.version !== "storyboard/v1" || value.shots.length === 0 || value.shots.some((shot) => !isNonEmptyString(shot.id) || !isNonEmptyString(shot.scriptSegment) || !isPositiveFiniteNumber(shot.durationSeconds))) throw new Error("冻结审核渲染分镜格式无效。 ");
 }
 
 function parseMediaSource(value: unknown): NonNullable<WorkerResult["mediaSource"]> {

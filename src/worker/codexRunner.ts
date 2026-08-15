@@ -1,6 +1,7 @@
 import {
   createWorkerTaskPackage,
   type ArtifactManifest,
+  type StoryboardManifest,
   type WorkerResult,
   type WorkerTaskPackageInput,
   type WorkerTaskPackage,
@@ -13,7 +14,7 @@ export interface ClaimedWorkerTask {
   attempt: number;
   budgetLimitCents: number;
   maxAttempts: number;
-  provider: "codex" | "google_tts" | "pexels" | "ffmpeg";
+  provider: "codex" | "google_tts" | "pexels" | "ffmpeg" | "freesound" | "hyperframes";
   model: string;
   promptVersion: string;
   episodeId: string;
@@ -103,11 +104,42 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
     reviewAnnotations: reviewAnnotations(snapshot),
     aRoll: aRoll(snapshot),
     media: media(snapshot),
+    reviewRender: reviewRender(snapshot),
     allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
     output,
     inputArtifacts: inputArtifacts(snapshot),
   });
+}
+
+function reviewRender(snapshot: Record<string, unknown>): WorkerTaskPackageInput["reviewRender"] {
+  if (snapshot.capability !== "review_rendering") return undefined;
+  const value = snapshot.review_render;
+  if (!isRecord(value) || !isRecord(value.storyboard) || !Array.isArray(value.members)) throw new Error("审核渲染任务冻结工程格式无效。");
+  const storyboard = value.storyboard;
+  if (storyboard.version !== "storyboard/v1" || !Array.isArray(storyboard.shots) || !Array.isArray(storyboard.audioCues)) throw new Error("审核渲染任务缺少冻结分镜。");
+  return {
+    projectRelativePath: requiredString(value.project_relative_path, "审核渲染任务缺少工程路径。"),
+    projectRevision: requiredPositiveNumber(value.project_revision, "审核渲染任务缺少工程修订。"),
+    preRenderReviewPackageId: requiredString(value.pre_render_review_package_id, "审核渲染任务缺少预渲染审核包。"),
+    storyboard: storyboard as unknown as StoryboardManifest,
+    members: value.members.map((member) => {
+      if (!isRecord(member)) throw new Error("审核渲染任务成员格式无效。");
+      return {
+        memberKey: requiredString(member.member_key, "审核渲染成员缺少标识。"),
+        memberKind: requiredReviewRenderMemberKind(member.member_kind),
+        relativePath: requiredString(member.relative_path, "审核渲染成员缺少路径。"),
+        sha256: requiredString(member.sha256, "审核渲染成员缺少哈希。"),
+        startSeconds: requiredNonNegativeNumber(member.start_seconds, "审核渲染成员缺少起始时间。"),
+        durationSeconds: requiredPositiveNumber(member.duration_seconds, "审核渲染成员缺少时长。"),
+      };
+    }),
+  };
+}
+
+function requiredReviewRenderMemberKind(value: unknown): "shot_media" | "narration" | "soundtrack" {
+  if (value === "shot_media" || value === "narration" || value === "soundtrack") return value;
+  throw new Error("审核渲染成员类型无效。");
 }
 
 function media(snapshot: Record<string, unknown>): WorkerTaskPackageInput["media"] {
