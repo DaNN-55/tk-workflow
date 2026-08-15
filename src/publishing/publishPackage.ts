@@ -6,7 +6,7 @@ import { verifyArtifactIndex } from "../worker/mediaLibrary.js";
 
 export const publishPackageVersion = "publish-package/v1" as const;
 
-const requiredArtifactTypes = ["render", "cover", "metadata", "qc_report"] as const;
+const requiredArtifactTypes = ["final_render", "cover", "metadata", "final_qc_report"] as const;
 
 export interface PublishPackage {
   relativePath: string;

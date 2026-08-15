@@ -19,14 +19,14 @@ describe("发布包", () => {
     const episodeDirectory = join(assetRoot, "episodes", episodeId);
     await mkdir(episodeDirectory, { recursive: true });
     const files = [
-      ["render.mp4", "render"],
+      ["final-render.mp4", "render"],
       ["cover.jpg", "cover"],
       ["metadata.json", '{"title":"发布标题"}'],
-      ["qc-report.json", '{"passed":true,"checks":[{"name":"duration","passed":true}]}'],
+      ["final-qc-report.json", '{"passed":true,"checks":[{"name":"duration","passed":true}]}'],
     ] as const;
     await Promise.all(files.map(([name, contents]) => writeFile(join(episodeDirectory, name), contents)));
     const artifacts = await Promise.all(files.map(async ([name, contents], index) => ({
-      artifactType: ["render", "cover", "metadata", "qc_report"][index],
+      artifactType: ["final_render", "cover", "metadata", "final_qc_report"][index],
       relativePath: `episodes/${episodeId}/${name}`,
       fileSize: Buffer.byteLength(contents),
       sha256: createHash("sha256").update(contents).digest("hex"),
@@ -47,25 +47,25 @@ describe("发布包", () => {
     const episodeDirectory = join(assetRoot, "episodes", episodeId);
     await mkdir(episodeDirectory, { recursive: true });
     const files = [
-      ["render.mp4", "render"],
+      ["final-render.mp4", "render"],
       ["cover.jpg", "cover"],
       ["metadata.json", '{"title":"发布标题"}'],
-      ["qc-report.json", '{"passed":false,"checks":[{"name":"duration","passed":false}]}'],
+      ["final-qc-report.json", '{"passed":false,"checks":[{"name":"duration","passed":false}]}'],
     ] as const;
     await Promise.all(files.map(([name, contents]) => writeFile(join(episodeDirectory, name), contents)));
     const artifacts = await Promise.all(files.map(async ([name, contents], index) => ({
-      artifactType: ["render", "cover", "metadata", "qc_report"][index],
+      artifactType: ["final_render", "cover", "metadata", "final_qc_report"][index],
       relativePath: `episodes/${episodeId}/${name}`,
       fileSize: Buffer.byteLength(contents),
       sha256: createHash("sha256").update(contents).digest("hex"),
     })));
 
     await expect(createPublishPackage({ assetRoot, episodeId, artifacts })).rejects.toThrow("QC 报告未通过");
-    await writeFile(join(episodeDirectory, "qc-report.json"), '{"passed":true,"checks":[{"name":"duration","passed":true}]}');
-    const qcContents = await readFile(join(episodeDirectory, "qc-report.json"), "utf8");
+    await writeFile(join(episodeDirectory, "final-qc-report.json"), '{"passed":true,"checks":[{"name":"duration","passed":true}]}');
+    const qcContents = await readFile(join(episodeDirectory, "final-qc-report.json"), "utf8");
     artifacts[3] = { ...artifacts[3], fileSize: Buffer.byteLength(qcContents), sha256: createHash("sha256").update(qcContents).digest("hex") };
     const publishPackage = await createPublishPackage({ assetRoot, episodeId, artifacts });
-    await writeFile(join(episodeDirectory, "render.mp4"), "tamper");
+    await writeFile(join(episodeDirectory, "final-render.mp4"), "tamper");
 
     await expect(verifyPublishPackage({ assetRoot, episodeId, publishPackage })).rejects.toThrow("SHA-256 不匹配");
   });

@@ -129,6 +129,15 @@ export interface WorkerTaskPackageInput {
       durationSeconds: number;
     }>;
   };
+  finalRender?: {
+    sourceReviewPackageId: string;
+    sourceProject: ArtifactManifest;
+    sourceRuntime: ArtifactManifest;
+    sourceQcReport: ArtifactManifest;
+    projectRelativePath: string;
+    projectRevision: number;
+    reviewRender: NonNullable<WorkerTaskPackageInput["reviewRender"]>;
+  };
   allowedTools: string[];
   allowedAssetRoot: string;
   output: {
@@ -169,6 +178,7 @@ export interface WorkerTaskPackage {
   };
   media?: WorkerTaskPackageInput["media"];
   reviewRender?: WorkerTaskPackageInput["reviewRender"];
+  finalRender?: WorkerTaskPackageInput["finalRender"];
   allowedTools: readonly string[];
   task: Pick<WorkerTaskPackageInput["task"], "id" | "type">;
   accountId: string;
@@ -252,6 +262,8 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
   if (input.capability === "soundtrack_generation" && (!input.media || input.media.adapter !== "freesound_preview")) throw new Error("声轨生成必须包含冻结的 Freesound 配置。");
   if (input.capability === "review_rendering" && !input.reviewRender) throw new Error("审核渲染必须包含冻结的合成工程。 ");
   if (input.capability !== "review_rendering" && input.reviewRender) throw new Error("只有审核渲染任务可以包含合成工程。 ");
+  if (input.capability === "final_rendering" && !input.finalRender) throw new Error("最终渲染必须包含冻结的审核工程。 ");
+  if (input.capability !== "final_rendering" && input.finalRender) throw new Error("只有最终渲染任务可以包含冻结的审核工程。 ");
   if (input.reviewRender) {
     if (input.task.provider !== "hyperframes") throw new Error("审核渲染任务 Provider 必须是 HyperFrames。 ");
     const render = input.reviewRender;
@@ -261,6 +273,19 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     for (const member of render.members) {
       if (!isNonEmptyString(member.memberKey) || (member.memberKind !== "shot_media" && member.memberKind !== "narration" && member.memberKind !== "soundtrack") || !isSafeRelativePath(member.relativePath) || !isSha256(member.sha256) || !isNonNegativeNumber(member.startSeconds) || !isPositiveFiniteNumber(member.durationSeconds) || !input.inputArtifacts.some((artifact) => artifact.relativePath === member.relativePath && artifact.sha256 === member.sha256)) throw new Error("冻结审核渲染成员格式无效。 ");
     }
+  }
+  if (input.finalRender) {
+    const finalRender = input.finalRender;
+    if (input.task.provider !== "hyperframes" || !isNonEmptyString(finalRender.sourceReviewPackageId) || !isSafeRelativePath(finalRender.projectRelativePath) || !Number.isInteger(finalRender.projectRevision) || finalRender.projectRevision < 1) throw new Error("冻结最终渲染工程格式无效。 ");
+    assertArtifactManifest(finalRender.sourceProject);
+    assertArtifactManifest(finalRender.sourceRuntime);
+    assertArtifactManifest(finalRender.sourceQcReport);
+    if (finalRender.sourceProject.artifactType !== "review_render_project" || finalRender.sourceRuntime.artifactType !== "review_render_runtime" || finalRender.sourceQcReport.artifactType !== "review_qc_report") throw new Error("最终渲染必须引用审核工程、运行时和 QC 报告。 ");
+    if (!input.inputArtifacts.some((artifact) => artifact.relativePath === finalRender.sourceProject.relativePath && artifact.sha256 === finalRender.sourceProject.sha256)
+      || !input.inputArtifacts.some((artifact) => artifact.relativePath === finalRender.sourceRuntime.relativePath && artifact.sha256 === finalRender.sourceRuntime.sha256)
+      || !input.inputArtifacts.some((artifact) => artifact.relativePath === finalRender.sourceQcReport.relativePath && artifact.sha256 === finalRender.sourceQcReport.sha256)) throw new Error("最终渲染引用未冻结的审核证据。 ");
+    const source = finalRender.reviewRender;
+    if (source.projectRelativePath !== finalRender.sourceProject.relativePath || source.projectRevision !== finalRender.projectRevision || !isNonEmptyString(source.preRenderReviewPackageId) || source.members.length === 0) throw new Error("最终渲染冻结工程不一致。 ");
   }
   if (input.media?.adapter === "google_tts") {
     if (input.task.provider !== "google_tts") throw new Error("旁白任务 Provider 必须与冻结 Google TTS 适配器匹配。");
@@ -304,6 +329,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     ...(input.aRoll ? { aRoll: { adapter: input.aRoll.adapter, shot: input.aRoll.shot } } : {}),
     ...(input.media ? { media: input.media } : {}),
     ...(input.reviewRender ? { reviewRender: { ...input.reviewRender, members: input.reviewRender.members.map((member) => ({ ...member })) } } : {}),
+    ...(input.finalRender ? { finalRender: { ...input.finalRender, sourceProject: { ...input.finalRender.sourceProject }, sourceRuntime: { ...input.finalRender.sourceRuntime }, sourceQcReport: { ...input.finalRender.sourceQcReport }, reviewRender: { ...input.finalRender.reviewRender, members: input.finalRender.reviewRender.members.map((member) => ({ ...member })) } } } : {}),
     allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
     accountId: input.episode.accountId,

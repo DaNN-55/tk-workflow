@@ -8,6 +8,7 @@ export async function executeHyperframesReviewRender(input: {
   taskPackage: WorkerTaskPackage;
   run(command: string, args: string[]): Promise<void>;
   validateMp4(path: string, minimumDurationSeconds: number): Promise<void>;
+  inspectMp4(path: string): Promise<QcInspection>;
 }): Promise<string> {
   const render = input.taskPackage.reviewRender;
   if (!render) throw new Error("审核渲染任务缺少冻结工程。");
@@ -19,20 +20,29 @@ export async function executeHyperframesReviewRender(input: {
   await input.run("hyperframes", ["check", projectDirectory]);
   await input.run("hyperframes", ["render", projectDirectory, "--quality", "standard", "--strict", "--no-best-effort", "--output", outputPath]);
   await input.validateMp4(outputPath, totalDuration(render));
-  const [projectArtifact, outputArtifact] = await Promise.all([
+  const qcReportPath = `${dirname(render.projectRelativePath)}/qc-report.json`;
+  const inspection = await input.inspectMp4(outputPath);
+  const report = buildQcReport({ taskPackage: input.taskPackage, projectContents: await readFile(projectPath, "utf8"), inspection, outputRelativePath: input.taskPackage.output.relativePath, projectRelativePath: render.projectRelativePath });
+  if (!report.passed) throw new Error("审核渲染未通过 QC 校验。");
+  await writeSafeAssetFile(input.taskPackage.assets.allowedRoot, qcReportPath, JSON.stringify(report, null, 2) + "\n");
+  const runtimePath = `${dirname(render.projectRelativePath)}/assets/gsap.min.js`;
+  const [projectArtifact, runtimeArtifact, outputArtifact, qcReportArtifact] = await Promise.all([
     artifact("review_render_project", render.projectRelativePath, projectPath),
+    artifact("review_render_runtime", runtimePath, await safeAssetOutputPath(input.taskPackage.assets.allowedRoot, runtimePath)),
     artifact(input.taskPackage.output.requiredArtifactTypes[0], input.taskPackage.output.relativePath, outputPath),
+    artifact("review_qc_report", qcReportPath, await safeAssetOutputPath(input.taskPackage.assets.allowedRoot, qcReportPath)),
   ]);
   const result: WorkerResult = {
     version: "worker-result/v1",
     taskId: input.taskPackage.task.id,
     status: "completed",
-    artifacts: [outputArtifact, projectArtifact],
+    artifacts: [outputArtifact, projectArtifact, runtimeArtifact, qcReportArtifact],
     validation: { passed: true, checks: [
       { name: "hyperframes_project", passed: true, detail: `HyperFrames 工程 v${render.projectRevision} 已冻结：${render.projectRelativePath}` },
       { name: "hyperframes_render", passed: true, detail: `标准质量审核渲染已完成：${input.taskPackage.output.relativePath}` },
       { name: "frozen_media_inputs", passed: true, detail: `仅使用预渲染审核包 ${render.preRenderReviewPackageId} 的 ${render.members.length} 个已批准成员。` },
       { name: "frozen_composition_adjustments", passed: true, detail: `合成配置已冻结：${render.adjustments.captionStyle} 字幕、${render.adjustments.pacing} 节奏、${render.adjustments.crop} 裁切、${render.adjustments.transition} 转场、${render.adjustments.layout} 布局。` },
+      ...report.checks,
     ] },
     actualCostCents: 0,
     blockers: [],
@@ -40,6 +50,25 @@ export async function executeHyperframesReviewRender(input: {
     nextStep: "Owner reviews the deterministic composition and QC evidence.",
   };
   return JSON.stringify(result);
+}
+
+export interface QcInspection { durationSeconds: number; width: number; height: number; hasAudio: boolean; blackFrameCount: number; }
+export interface QcReport { version: "qc-report/v1"; passed: boolean; output: { relativePath: string; durationSeconds: number; width: number; height: number; hasAudio: boolean }; checks: Array<{ name: string; passed: boolean; detail: string }>; }
+
+export function buildQcReport(input: { taskPackage: WorkerTaskPackage; projectContents: string; inspection: QcInspection; outputRelativePath: string; projectRelativePath: string }): QcReport {
+  const render = input.taskPackage.reviewRender ?? input.taskPackage.finalRender?.reviewRender;
+  if (!render) throw new Error("QC 报告缺少冻结合成工程。");
+  const expectedDuration = totalDuration(render);
+  const captionsPresent = render.storyboard.shots.every((shot) => input.projectContents.includes(escapeHtml(shot.scriptSegment)));
+  const checks = [
+    { name: "duration_coverage", passed: Math.abs(input.inspection.durationSeconds - expectedDuration) <= 0.15, detail: `时长 ${input.inspection.durationSeconds.toFixed(3)}s，冻结分镜 ${expectedDuration.toFixed(3)}s。` },
+    { name: "resolution", passed: input.inspection.width === 1080 && input.inspection.height === 1920, detail: `分辨率 ${input.inspection.width}×${input.inspection.height}。` },
+    { name: "audio", passed: input.inspection.hasAudio, detail: input.inspection.hasAudio ? "检测到音频流。" : "缺少音频流。" },
+    { name: "black_frames", passed: input.inspection.blackFrameCount === 0, detail: `检测到 ${input.inspection.blackFrameCount} 段黑帧。` },
+    { name: "subtitles", passed: captionsPresent, detail: captionsPresent ? "全部冻结分镜片段均已写入字幕工程。" : "冻结分镜字幕不完整。" },
+    { name: "completeness", passed: render.members.every((member) => input.taskPackage.assets.inputs.some((artifact) => artifact.relativePath === member.relativePath && artifact.sha256 === member.sha256)), detail: `工程 ${input.projectRelativePath} 已逐项核验 ${render.members.length} 个冻结成员的路径与哈希。` },
+  ];
+  return { version: "qc-report/v1", passed: checks.every((check) => check.passed), output: { relativePath: input.outputRelativePath, ...input.inspection }, checks };
 }
 
 export function projectHtml(taskPackage: WorkerTaskPackage): string {
@@ -79,15 +108,16 @@ async function artifact(artifactType: string, relativePath: string, path: string
   return { artifactType, relativePath, sha256: createHash("sha256").update(bytes).digest("hex"), fileSize: bytes.byteLength };
 }
 
-async function copyFrozenProjectAssets(taskPackage: WorkerTaskPackage): Promise<void> {
+export async function copyFrozenProjectAssets(taskPackage: WorkerTaskPackage, render = taskPackage.reviewRender): Promise<void> {
+  if (!render) throw new Error("冻结工程缺失。");
   const assetRoot = await realpath(resolve(taskPackage.assets.allowedRoot));
-  for (const member of taskPackage.reviewRender?.members ?? []) {
+  for (const member of render.members) {
     const source = resolve(assetRoot, member.relativePath);
     const fromRoot = relative(assetRoot, source);
     if (isAbsolute(fromRoot) || fromRoot.startsWith("..")) throw new Error("冻结媒体输入越出资产根目录。");
-    await writeSafeAssetFile(taskPackage.assets.allowedRoot, `${dirname(taskPackage.reviewRender?.projectRelativePath ?? "")}/assets/${assetFilename(member.relativePath)}`, await readFile(source));
+    await writeSafeAssetFile(taskPackage.assets.allowedRoot, `${dirname(render.projectRelativePath)}/assets/${assetFilename(member.relativePath)}`, await readFile(source));
   }
-  await writeSafeAssetFile(taskPackage.assets.allowedRoot, `${dirname(taskPackage.reviewRender?.projectRelativePath ?? "")}/assets/gsap.min.js`, await readFile(resolve(process.cwd(), "node_modules", "gsap", "dist", "gsap.min.js")));
+  await writeSafeAssetFile(taskPackage.assets.allowedRoot, `${dirname(render.projectRelativePath)}/assets/gsap.min.js`, await readFile(resolve(process.cwd(), "node_modules", "gsap", "dist", "gsap.min.js")));
 }
 
 function assetFilename(relativePath: string): string { return `${createHash("sha256").update(relativePath).digest("hex")}${extname(basename(relativePath))}`; }

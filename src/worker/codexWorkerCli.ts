@@ -16,6 +16,7 @@ import { verifyReportedStoryboardArtifact } from "./storyboardArtifact.js";
 import { workerResultJsonSchema } from "./workerResultSchema.js";
 import { executeControlledMediaTask } from "./controlledMediaExecutor.js";
 import { executeHyperframesReviewRender } from "./hyperframesReviewRenderer.js";
+import { executeHyperframesFinalRender } from "./hyperframesFinalRenderer.js";
 import { readTaskIdArgument } from "./taskClaimArguments.js";
 
 const supabaseUrl = requiredEnvironment("SUPABASE_URL");
@@ -64,7 +65,10 @@ async function claimNextTask(): Promise<ClaimedWorkerTask | null> {
 
 async function executeTask(taskPackage: WorkerTaskPackage): Promise<string> {
   if (taskPackage.provider === "codex") return executeCodex(taskPackage);
-  if (taskPackage.provider === "hyperframes") return executeHyperframesReviewRender({ taskPackage, run: runCommand, validateMp4: validateMp4Artifact });
+  if (taskPackage.provider === "hyperframes") {
+    const input = { taskPackage, run: runCommand, validateMp4: validateMp4Artifact, inspectMp4: inspectMp4Artifact };
+    return taskPackage.capability === "final_rendering" ? executeHyperframesFinalRender(input) : executeHyperframesReviewRender(input);
+  }
   return executeControlledMediaTask({
     taskPackage,
     fetcher: fetch,
@@ -106,6 +110,16 @@ async function validateMp4Artifact(path: string, minimumDurationSeconds: number)
   if (!Number.isFinite(duration) || duration < minimumDurationSeconds) {
     throw new Error(`Pexels 视频不可播放或时长不足：${duration || "未知"} 秒。`);
   }
+}
+
+async function inspectMp4Artifact(path: string): Promise<{ durationSeconds: number; width: number; height: number; hasAudio: boolean; blackFrameCount: number }> {
+  const { stdout } = await runCommandWithOutput("ffprobe", ["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height", "-of", "json", path]);
+  const inspected = JSON.parse(stdout) as { format?: { duration?: string }; streams?: Array<{ codec_type?: string; width?: number; height?: number }> };
+  const durationSeconds = Number(inspected.format?.duration);
+  const video = inspected.streams?.find((stream) => stream.codec_type === "video");
+  if (!Number.isFinite(durationSeconds) || !video || !Number.isInteger(video.width) || !Number.isInteger(video.height)) throw new Error("最终视频缺少有效的时长或视频流。");
+  const black = await runCommandWithOutput("ffmpeg", ["-nostdin", "-v", "info", "-i", path, "-vf", "blackdetect=d=0.1:pix_th=0.02", "-an", "-f", "null", "-"]);
+  return { durationSeconds, width: Number(video.width), height: Number(video.height), hasAudio: Boolean(inspected.streams?.some((stream) => stream.codec_type === "audio")), blackFrameCount: (black.stderr.match(/black_start:/g) ?? []).length };
 }
 
 async function reportResult(taskId: string, attempt: number, workerResult: unknown): Promise<void> {
@@ -181,7 +195,7 @@ function runCommand(command: string, argumentsList: string[]): Promise<void> {
   return runCommandWithOutput(command, argumentsList).then(() => undefined);
 }
 
-function runCommandWithOutput(command: string, argumentsList: string[]): Promise<{ stdout: string }> {
+function runCommandWithOutput(command: string, argumentsList: string[]): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, argumentsList, { stdio: ["ignore", "pipe", "pipe"] });
     let stdout = "";
@@ -190,7 +204,7 @@ function runCommandWithOutput(command: string, argumentsList: string[]): Promise
     child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString(); });
     child.once("error", reject);
     child.once("close", (code) => {
-      if (code === 0) resolve({ stdout });
+      if (code === 0) resolve({ stdout, stderr });
       else reject(new Error(stderr.trim() || `Codex exited with status ${code ?? "unknown"}.`));
     });
   });

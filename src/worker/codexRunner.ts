@@ -106,11 +106,29 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
     aRoll: aRoll(snapshot),
     media: media(snapshot),
     reviewRender: reviewRender(snapshot),
+    finalRender: finalRender(snapshot),
     allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
     output,
     inputArtifacts: inputArtifacts(snapshot),
   });
+}
+
+function finalRender(snapshot: Record<string, unknown>): WorkerTaskPackageInput["finalRender"] {
+  if (snapshot.capability !== "final_rendering") return undefined;
+  const value = snapshot.final_render;
+  if (!isRecord(value)) throw new Error("最终渲染任务冻结工程格式无效。");
+  const sourceProject = artifactManifest(value.source_project, "最终渲染任务缺少审核工程证据。");
+  const sourceRuntime = artifactManifest(value.source_runtime, "最终渲染任务缺少审核运行时证据。");
+  const sourceQcReport = artifactManifest(value.source_qc_report, "最终渲染任务缺少 QC 报告证据。");
+  const review = reviewRender({ capability: "review_rendering", review_render: value.review_render });
+  if (!review) throw new Error("最终渲染任务缺少审核工程。");
+  return { sourceReviewPackageId: requiredString(value.source_review_package_id, "最终渲染任务缺少审核包。"), sourceProject, sourceRuntime, sourceQcReport, projectRelativePath: requiredString(value.project_relative_path, "最终渲染任务缺少工程路径。"), projectRevision: requiredPositiveNumber(value.project_revision, "最终渲染任务缺少工程修订。"), reviewRender: review };
+}
+
+function artifactManifest(value: unknown, message: string) {
+  if (!isRecord(value)) throw new Error(message);
+  return { artifactType: requiredString(value.artifact_type, message), relativePath: requiredString(value.relative_path, message), sha256: requiredString(value.sha256, message), fileSize: requiredNonNegativeNumber(value.file_size, message) };
 }
 
 function reviewRender(snapshot: Record<string, unknown>): WorkerTaskPackageInput["reviewRender"] {
