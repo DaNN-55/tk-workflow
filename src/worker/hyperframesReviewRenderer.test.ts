@@ -15,6 +15,7 @@ describe("HyperFrames 审核渲染工程", () => {
       ],
       reviewRender: {
         projectRelativePath: "episodes/episode-1/review-render/v1/index.html", projectRevision: 1, preRenderReviewPackageId: "package-1",
+        adjustments: { captionStyle: "minimal", pacing: "gentle", crop: "contain", transition: "cut", layout: "center", reason: "字幕需要更克制，保留完整画面。" },
         storyboard: { version: "storyboard/v1", shots: [{ id: "shot-1", scriptSegment: "雨落在旧街。", durationSeconds: 4, shotType: "b_roll", productionMethod: "Pexels", inputBasis: [{ relativePath: "episodes/episode-1/b-roll/shot-1.mp4", sha256: "a".repeat(64) }], targetSpec: "9:16" }], audioCues: [] },
         members: [
           { memberKey: "shot:shot-1", memberKind: "shot_media", relativePath: "episodes/episode-1/b-roll/shot-1.mp4", sha256: "a".repeat(64), startSeconds: 0, durationSeconds: 4 },
@@ -28,5 +29,9 @@ describe("HyperFrames 审核渲染工程", () => {
     expect(html).toContain("雨落在旧街。");
     expect(html).toContain('data-duration="4"');
     expect(html).toContain("review-render-v1");
+    expect(html).toContain("caption-minimal");
+    expect(html).toContain("object-fit:contain");
+    expect(html).toContain("bottom:780px");
+    expect(html).not.toContain("document.querySelectorAll('.shot')");
   });
 });

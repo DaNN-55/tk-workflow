@@ -181,6 +181,14 @@ body { min-width: 0; }
   .episode-detail-drawer { width: min(480px, 56vw); }
 }
 
+.composition-adjustments { border: 1px solid #d9dee7; border-radius: 7px; display: grid; gap: 10px; margin: 0; padding: 12px; }
+.composition-adjustments legend { color: #303845; font-size: 12px; font-weight: 800; padding: 0 5px; }
+.composition-adjustments .muted-copy { margin: 0; }
+.composition-adjustments select { background: #fff; border: 1px solid #cfd5df; border-radius: 5px; color: #262c37; font: inherit; font-size: 13px; min-height: 36px; padding: 6px 9px; width: 100%; }
+.app-shell[data-theme="dark"] .composition-adjustments { border-color: #394250; }
+.app-shell[data-theme="dark"] .composition-adjustments legend { color: #d9e0ea; }
+.app-shell[data-theme="dark"] .composition-adjustments select { background: #191e27; border-color: #394250; color: #eef3fb; }
+
 .pre-render-review-package { display: grid; gap: 11px; }
 .pre-render-review-package > h3 { margin-bottom: 0; }
 .pre-render-review-package > .muted-copy { margin: 0 0 2px; }

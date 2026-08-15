@@ -1,6 +1,7 @@
 import {
   createWorkerTaskPackage,
   type ArtifactManifest,
+  type ReviewRenderAdjustments,
   type StoryboardManifest,
   type WorkerResult,
   type WorkerTaskPackageInput,
@@ -122,6 +123,7 @@ function reviewRender(snapshot: Record<string, unknown>): WorkerTaskPackageInput
     projectRelativePath: requiredString(value.project_relative_path, "审核渲染任务缺少工程路径。"),
     projectRevision: requiredPositiveNumber(value.project_revision, "审核渲染任务缺少工程修订。"),
     preRenderReviewPackageId: requiredString(value.pre_render_review_package_id, "审核渲染任务缺少预渲染审核包。"),
+    adjustments: reviewRenderAdjustments(value.adjustments),
     storyboard: storyboard as unknown as StoryboardManifest,
     members: value.members.map((member) => {
       if (!isRecord(member)) throw new Error("审核渲染任务成员格式无效。");
@@ -135,6 +137,17 @@ function reviewRender(snapshot: Record<string, unknown>): WorkerTaskPackageInput
       };
     }),
   };
+}
+
+function reviewRenderAdjustments(value: unknown): ReviewRenderAdjustments {
+  if (!isRecord(value)) throw new Error("审核渲染任务缺少冻结合成配置。");
+  const captionStyle = value.caption_style;
+  const pacing = value.pacing;
+  const crop = value.crop;
+  const transition = value.transition;
+  const layout = value.layout;
+  if ((captionStyle !== "cinematic" && captionStyle !== "minimal") || (pacing !== "gentle" && pacing !== "standard" && pacing !== "compact") || (crop !== "cover" && crop !== "contain") || (transition !== "fade" && transition !== "cut") || (layout !== "lower_third" && layout !== "center")) throw new Error("审核渲染任务冻结合成配置无效。");
+  return { captionStyle, pacing, crop, transition, layout, reason: requiredString(value.reason, "审核渲染任务缺少调整理由。") };
 }
 
 function requiredReviewRenderMemberKind(value: unknown): "shot_media" | "narration" | "soundtrack" {

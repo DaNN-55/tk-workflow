@@ -101,6 +101,7 @@ const materialInputProps = {
   onCreateStoryboardAnnotation: vi.fn().mockResolvedValue(undefined),
   onCreateAudioTrackAnnotation: vi.fn().mockResolvedValue(undefined),
   onImportMaterial: vi.fn().mockResolvedValue(undefined),
+  onRequestReviewRenderRevision: vi.fn().mockResolvedValue(true),
   onCommissionScript: vi.fn().mockResolvedValue(undefined),
   onUpdateTitle: vi.fn().mockResolvedValue(undefined),
 };

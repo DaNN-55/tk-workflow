@@ -1204,6 +1204,27 @@ export type Database = {
         Returns: Database["public"]["Tables"]["pre_render_review_member_decisions"]["Row"]
         SetofOptions: { from: "*"; to: "pre_render_review_member_decisions"; isOneToOne: true; isSetofReturn: false }
       }
+      request_review_render_revision: {
+        Args: {
+          p_caption_style: string
+          p_crop: string
+          p_layout: string
+          p_pacing: string
+          p_reason: string
+          p_review_package_id: string
+          p_transition: string
+        }
+        Returns: {
+          account_id: string
+          blueprint_version_id: string
+          created_at: string
+          id: string
+          stage: Database["public"]["Enums"]["episode_stage"]
+          title: string
+          updated_at: string
+        }
+        SetofOptions: { from: "*"; to: "episodes"; isOneToOne: true; isSetofReturn: false }
+      }
       transition_episode: {
         Args: {
           p_episode_id: string

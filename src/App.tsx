@@ -38,6 +38,16 @@ interface ReviewAction {
   requestChangesStage: EpisodeStage;
 }
 
+interface ReviewRenderRevisionRequest {
+  reviewPackageId: string;
+  captionStyle: "cinematic" | "minimal";
+  pacing: "gentle" | "standard" | "compact";
+  crop: "cover" | "contain";
+  transition: "fade" | "cut";
+  layout: "lower_third" | "center";
+  reason: string;
+}
+
 interface WorkerBlocker {
   code: string;
   detail: string;
@@ -630,6 +640,31 @@ export function App() {
     }
   }
 
+  async function requestReviewRenderRevision(input: ReviewRenderRevisionRequest): Promise<boolean> {
+    setPendingAction(`review-render-revision-${input.reviewPackageId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("request_review_render_revision", {
+        p_caption_style: input.captionStyle,
+        p_crop: input.crop,
+        p_layout: input.layout,
+        p_pacing: input.pacing,
+        p_reason: input.reason,
+        p_review_package_id: input.reviewPackageId,
+        p_transition: input.transition,
+      });
+      if (error) throw error;
+      setMessage("合成调整已冻结；会复用已批准媒体和音轨生成新的审核渲染。");
+      await refreshWorkspace();
+      return true;
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : error && typeof error === "object" && "message" in error && typeof error.message === "string" ? error.message : "无法提交合成调整。");
+      return false;
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   async function createStoryboardAnnotation(input: StoryboardAnnotationRequest): Promise<void> {
     setPendingAction(`storyboard-annotation-${input.reviewPackageId}-${input.shotId}`);
     setErrorMessage("");
@@ -917,10 +952,11 @@ export function App() {
             isMaterialPending={pendingAction === `material-${selectedEpisode.id}`}
             isScriptCommissionPending={pendingAction === `commission-${selectedEpisode.id}`}
             isTitlePending={pendingAction === `title-${selectedEpisode.id}`}
-            isTransitionPending={pendingAction.startsWith(`transition-${selectedEpisode.id}-`)}
+            isTransitionPending={pendingAction.startsWith(`transition-${selectedEpisode.id}-`) || pendingAction.startsWith("review-render-revision-")}
             onCreateLocalDirectory={createLocalEpisodeDirectory}
             onCommissionScript={commissionScript}
             onImportMaterial={importProductionMaterial}
+            onRequestReviewRenderRevision={requestReviewRenderRevision}
             onTransition={transitionEpisode}
             onUpdateTitle={updateEpisodeTitle}
             ownerId={session.user.id}
@@ -1133,7 +1169,7 @@ export function PublicationConfirmationForm({ episode, isPending, onConfirm, own
   return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => updateDraft({ acknowledged: event.target.checked, reason })} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => updateDraft({ acknowledged, reason: event.target.value })} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label>{draft ? <OperationDraftNotice isRestored={isRestoredDraft} onClear={clearDraft} /> : null}<button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
-export function EpisodeDetail({ artifacts, audioTrackAnnotations, audioTracks, blueprint, episode, isDirectoryPending, isMaterialPending, isScriptCommissionPending, isStoryboardAnnotationPending, isTitlePending, isTransitionPending, materialRevisions, onCreateAudioTrackAnnotation, onCreateLocalDirectory, onCommissionScript, onCreateStoryboardAnnotation, onImportMaterial, onReviewPreRenderMember = async () => {}, onTransition, onUpdateTitle, ownerId = "local-owner", preRenderReviewMemberDecisions = [], preRenderReviewMembers = [], reviewAnnotations, reviewPackages, tasks, transitions }: { artifacts: Artifact[]; audioTrackAnnotations: AudioTrackAnnotation[]; audioTracks: AudioTrack[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isScriptCommissionPending: boolean; isStoryboardAnnotationPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateAudioTrackAnnotation: (input: AudioTrackAnnotationRequest) => Promise<void>; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onCommissionScript: (input: ScriptCommissionRequest) => Promise<void>; onCreateStoryboardAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onReviewPreRenderMember?: (input: PreRenderMemberReviewRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; preRenderReviewMemberDecisions?: PreRenderReviewMemberDecision[]; preRenderReviewMembers?: PreRenderReviewMember[]; reviewAnnotations: ReviewAnnotation[]; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
+export function EpisodeDetail({ artifacts, audioTrackAnnotations, audioTracks, blueprint, episode, isDirectoryPending, isMaterialPending, isScriptCommissionPending, isStoryboardAnnotationPending, isTitlePending, isTransitionPending, materialRevisions, onCreateAudioTrackAnnotation, onCreateLocalDirectory, onCommissionScript, onCreateStoryboardAnnotation, onImportMaterial, onRequestReviewRenderRevision, onReviewPreRenderMember = async () => {}, onTransition, onUpdateTitle, ownerId = "local-owner", preRenderReviewMemberDecisions = [], preRenderReviewMembers = [], reviewAnnotations, reviewPackages, tasks, transitions }: { artifacts: Artifact[]; audioTrackAnnotations: AudioTrackAnnotation[]; audioTracks: AudioTrack[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isScriptCommissionPending: boolean; isStoryboardAnnotationPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateAudioTrackAnnotation: (input: AudioTrackAnnotationRequest) => Promise<void>; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onCommissionScript: (input: ScriptCommissionRequest) => Promise<void>; onCreateStoryboardAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onRequestReviewRenderRevision: (input: ReviewRenderRevisionRequest) => Promise<boolean>; onReviewPreRenderMember?: (input: PreRenderMemberReviewRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; preRenderReviewMemberDecisions?: PreRenderReviewMemberDecision[]; preRenderReviewMembers?: PreRenderReviewMember[]; reviewAnnotations: ReviewAnnotation[]; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
   const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
   const episodeMaterials = materialRevisions.filter((revision) => revision.episode_id === episode.id);
   const history = transitions.filter((transition) => transition.episode_id === episode.id);
@@ -1177,7 +1213,7 @@ export function EpisodeDetail({ artifacts, audioTrackAnnotations, audioTracks, b
     <AudioTrackPanel annotations={audioTrackAnnotations.filter((annotation) => audioTracks.some((track) => track.episode_id === episode.id && track.id === annotation.audio_track_id))} onCreateAnnotation={onCreateAudioTrackAnnotation} tasks={tasks.filter((task) => task.episode_id === episode.id)} tracks={audioTracks.filter((track) => track.episode_id === episode.id)} />
     <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
     {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.taskId}-${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
-    {reviewAction && isStoryboardReviewValid ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} /> : null}
+    {reviewAction && isStoryboardReviewValid ? <ReviewActions episode={episode} isPending={isTransitionPending} onRequestReviewRenderRevision={onRequestReviewRenderRevision} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} reviewPackageId={reviewPackage?.id ?? null} /> : null}
     {episode.stage === "publishing_review" ? <section className="review-section publication-decision"><h3>发布确认</h3><PublicationConfirmationForm episode={episode} isPending={isTransitionPending} onConfirm={onTransition} ownerId={ownerId} /></section> : null}
     <section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section>
   </>;
@@ -1614,10 +1650,16 @@ function useLocalArtifactBlob(source: string | null) {
   return { error, url };
 }
 
-function ReviewActions({ episode, isPending, onTransition, ownerId, reviewAction }: { episode: Episode; isPending: boolean; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; ownerId: string; reviewAction: ReviewAction }) {
+function ReviewActions({ episode, isPending, onRequestReviewRenderRevision, onTransition, ownerId, reviewAction, reviewPackageId }: { episode: Episode; isPending: boolean; onRequestReviewRenderRevision: (input: ReviewRenderRevisionRequest) => Promise<boolean>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; ownerId: string; reviewAction: ReviewAction; reviewPackageId: string | null }) {
   const [draft, setDraft] = useState(() => readOperationDraft<{ reason: string }>(ownerId, episode.id, "review-decision"));
   const [reason, setReason] = useState(draft?.reason ?? "");
   const [error, setError] = useState("");
+  const [captionStyle, setCaptionStyle] = useState<ReviewRenderRevisionRequest["captionStyle"]>("cinematic");
+  const [pacing, setPacing] = useState<ReviewRenderRevisionRequest["pacing"]>("standard");
+  const [crop, setCrop] = useState<ReviewRenderRevisionRequest["crop"]>("cover");
+  const [transitionStyle, setTransitionStyle] = useState<ReviewRenderRevisionRequest["transition"]>("fade");
+  const [layout, setLayout] = useState<ReviewRenderRevisionRequest["layout"]>("lower_third");
+  const isReviewRenderRevision = episode.stage === "qc_review" && reviewAction.requestChangesStage === "render_ready";
 
   useEffect(() => {
     const next = readOperationDraft<{ reason: string }>(ownerId, episode.id, "review-decision");
@@ -1635,11 +1677,17 @@ function ReviewActions({ episode, isPending, onTransition, ownerId, reviewAction
       setError("请填写审批理由。");
       return;
     }
+    if (isReviewRenderRevision && toStage === "render_ready") {
+      if (!reviewPackageId) { setError("当前审核渲染包不存在，无法提交调整。"); return; }
+      setError("");
+      if (await onRequestReviewRenderRevision({ reviewPackageId, captionStyle, pacing, crop, transition: transitionStyle, layout, reason: trimmedReason })) clearDraft();
+      return;
+    }
     setError("");
     if (await onTransition(episode.id, toStage, trimmedReason)) clearDraft();
   }
 
-  return <section className="review-section review-decision"><h3>Owner 审批</h3><label>审批理由<textarea aria-label="审批理由" onChange={(event) => changeReason(event.target.value)} placeholder="说明批准或要求修改的原因" rows={3} value={reason} /></label>{draft ? <OperationDraftNotice onClear={clearDraft} /> : null}{error ? <p className="form-error">{error}</p> : null}<div className="review-actions"><button className="button button-primary" disabled={isPending} onClick={() => void transition(reviewAction.approveStage)} type="button">批准</button><button className="button button-secondary" disabled={isPending} onClick={() => void transition(reviewAction.requestChangesStage)} type="button">要求修改</button></div></section>;
+  return <section className="review-section review-decision"><h3>Owner 审批</h3>{isReviewRenderRevision ? <fieldset className="composition-adjustments"><legend>仅调整合成层</legend><p className="muted-copy">会生成新的 HyperFrames 工程与审核渲染；已批准的镜头媒体和音轨不会重新生成或重新审批。</p><label>字幕风格<select aria-label="字幕风格" onChange={(event) => setCaptionStyle(event.target.value as ReviewRenderRevisionRequest["captionStyle"])} value={captionStyle}><option value="cinematic">电影感</option><option value="minimal">极简</option></select></label><label>节奏<select aria-label="合成节奏" onChange={(event) => setPacing(event.target.value as ReviewRenderRevisionRequest["pacing"])} value={pacing}><option value="gentle">舒缓</option><option value="standard">标准</option><option value="compact">紧凑</option></select></label><label>裁切<select aria-label="画面裁切" onChange={(event) => setCrop(event.target.value as ReviewRenderRevisionRequest["crop"])} value={crop}><option value="cover">铺满</option><option value="contain">完整显示</option></select></label><label>转场<select aria-label="镜头转场" onChange={(event) => setTransitionStyle(event.target.value as ReviewRenderRevisionRequest["transition"])} value={transitionStyle}><option value="fade">柔和淡入淡出</option><option value="cut">直接切换</option></select></label><label>字幕布局<select aria-label="字幕布局" onChange={(event) => setLayout(event.target.value as ReviewRenderRevisionRequest["layout"])} value={layout}><option value="lower_third">下方字幕</option><option value="center">居中字幕</option></select></label></fieldset> : null}<label>{isReviewRenderRevision ? "调整原因" : "审批理由"}<textarea aria-label={isReviewRenderRevision ? "调整原因" : "审批理由"} onChange={(event) => changeReason(event.target.value)} placeholder={isReviewRenderRevision ? "说明本次合成调整的原因" : "说明批准或要求修改的原因"} rows={3} value={reason} /></label>{draft ? <OperationDraftNotice onClear={clearDraft} /> : null}{error ? <p className="form-error">{error}</p> : null}<div className="review-actions"><button className="button button-primary" disabled={isPending} onClick={() => void transition(reviewAction.approveStage)} type="button">批准</button><button className="button button-secondary" disabled={isPending} onClick={() => void transition(reviewAction.requestChangesStage)} type="button">{isReviewRenderRevision ? "按此配置重渲染" : "要求修改"}</button></div></section>;
 }
 
 function OperationDraftNotice({ isRestored = false, onClear }: { isRestored?: boolean; onClear: () => void }) { return <div className="operation-draft-notice" role="status"><span>{isRestored ? "已恢复本地草稿" : "本地草稿已保存"}</span><button className="text-button" onClick={onClear} type="button">清除草稿</button></div>; }
