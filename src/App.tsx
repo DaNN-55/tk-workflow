@@ -9,9 +9,11 @@ import { createPublicationConfirmation } from "./publishing/publicationConfirmat
 import { LearningWorkspace } from "./learning/LearningWorkspace";
 import type { ApproveBlueprintChangeSuggestionInput, SaveBlueprintChangeSuggestionInput, SaveExperimentInput, SaveLearningReportInput, SaveMetricSnapshotInput } from "./learning/LearningWorkspace";
 import { clearOperationDraft, readOperationDraft, writeOperationDraft } from "./operationDraft";
+import { OperationsWorkspace } from "./operations/OperationsWorkspace";
+import { currentReviewPackage, workerBlockers } from "./reviews/reviewSelectors";
 import type { StoryboardAudioCue, StoryboardShotManifest } from "./worker/contracts";
 
-type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
+type NavigationItem = "accounts" | "episodes" | "operations" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
 type Account = Database["public"]["Tables"]["accounts"]["Row"];
 type Blueprint = Database["public"]["Tables"]["account_blueprint_versions"]["Row"];
@@ -58,12 +60,6 @@ const defaultReviewRenderAdjustments: ReviewRenderAdjustmentDraft = {
   transition: "fade",
   layout: "lower_third",
 };
-
-interface WorkerBlocker {
-  code: string;
-  detail: string;
-  taskId?: string;
-}
 
 interface ArollTaskEvidence {
   adapter: string;
@@ -135,6 +131,7 @@ interface Workspace {
 const navigation: Array<{ id: NavigationItem; label: string }> = [
   { id: "accounts", label: "账号" },
   { id: "episodes", label: "生产单" },
+  { id: "operations", label: "系列运营" },
   { id: "reviews", label: "审核" },
   { id: "publish", label: "发布队列" },
   { id: "learning", label: "复盘" },
@@ -236,27 +233,6 @@ function reviewRenderAdjustmentsFromContext(value: Json): ReviewRenderAdjustment
   const { caption_style, pacing, crop, transition, layout } = adjustments;
   if ((caption_style !== "cinematic" && caption_style !== "minimal") || (pacing !== "gentle" && pacing !== "standard" && pacing !== "compact") || (crop !== "cover" && crop !== "contain") || (transition !== "fade" && transition !== "cut") || (layout !== "lower_third" && layout !== "center")) return defaultReviewRenderAdjustments;
   return { captionStyle: caption_style, pacing, crop, transition, layout };
-}
-
-function currentReviewPackage(reviewPackages: ReviewPackage[], episode: Episode): ReviewPackage | null {
-  return reviewPackages
-    .filter((candidate) => candidate.episode_id === episode.id && candidate.stage === episode.stage && !candidate.invalidated_at)
-    .reduce<ReviewPackage | null>((latest, candidate) => !latest || candidate.revision_number > latest.revision_number ? candidate : latest, null);
-}
-
-function workerBlockers(tasks: Task[], episodeId: string): WorkerBlocker[] {
-  return tasks
-    .filter((task) => task.episode_id === episodeId && task.status === "blocked")
-    .flatMap((task) => blockersFromResult(task.last_result).map((blocker) => ({ ...blocker, taskId: task.id })));
-}
-
-function blockersFromResult(result: Json | null): WorkerBlocker[] {
-  if (!result || Array.isArray(result) || typeof result !== "object" || !("blockers" in result) || !Array.isArray(result.blockers)) return [];
-  return result.blockers.flatMap((blocker) => {
-    if (!blocker || Array.isArray(blocker) || typeof blocker !== "object") return [];
-    const { code, detail } = blocker;
-    return typeof code === "string" && code && typeof detail === "string" && detail ? [{ code, detail }] : [];
-  });
 }
 
 function aRollTaskEvidence(task: Task): ArollTaskEvidence | null {
@@ -911,6 +887,18 @@ export function App() {
             episodes={workspace.episodes}
             onSelectEpisode={openEpisodeDetail}
             selectedEpisode={selectedEpisode}
+          />
+        ) : activeNavigation === "operations" ? (
+          <OperationsWorkspace
+            episodes={workspace.episodes}
+            onSelectEpisode={openEpisodeDetail}
+            preRenderReviewMemberDecisions={workspace.preRenderReviewMemberDecisions}
+            preRenderReviewMembers={workspace.preRenderReviewMembers}
+            reviewPackages={workspace.reviewPackages}
+            selectedEpisode={selectedEpisode}
+            series={workspace.series}
+            seriesVersions={workspace.seriesVersions}
+            tasks={workspace.tasks}
           />
         ) : activeNavigation === "publish" ? (
           <PublishWorkspace
@@ -1782,6 +1770,6 @@ function PasswordForm({ isPending, onClose, onSubmit }: { isPending: boolean; on
 }
 
 function Icon({ name }: { name: NavigationItem | "Moon" | "Sun" | "Exit" | "Close" | "Play" | "PanelLeft" | "User" }) {
-  const paths: Record<string, string> = { accounts: "M4 20v-1a4 4 0 0 1 4-4h5a4 4 0 0 1 4 4v1M10.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 9v6M22 12h-6", episodes: "M4 4h16v16H4zM9 4v16M4 9h16M13 12h4M13 16h4", reviews: "M4 5h16v11H8l-4 4z", publish: "M12 3v12M7 8l5-5 5 5M5 21h14", learning: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 5.5v16M8 7h8", Moon: "M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z", Sun: "M12 3v2M12 19v2M3 12h2M19 12h2m-2.64-6.64-1.41 1.41M7.05 16.95l-1.41 1.41m0-12.72 1.41 1.41m9.9 9.9 1.41 1.41M15.5 12a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z", Exit: "M10 17l5-5-5-5M15 12H3m9-8h6a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-6", Close: "m6 6 12 12M18 6 6 18", Play: "m9 6 9 6-9 6z", PanelLeft: "M4 4h16v16H4zM10 4v16M7 8v8", User: "M20 21a8 8 0 0 0-16 0M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8" };
+  const paths: Record<string, string> = { accounts: "M4 20v-1a4 4 0 0 1 4-4h5a4 4 0 0 1 4 4v1M10.5 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8M19 9v6M22 12h-6", episodes: "M4 4h16v16H4zM9 4v16M4 9h16M13 12h4M13 16h4", operations: "M5 19V9m7 10V5m7 14v-7M3 19h18", reviews: "M4 5h16v11H8l-4 4z", publish: "M12 3v12M7 8l5-5 5 5M5 21h14", learning: "M4 5.5A2.5 2.5 0 0 1 6.5 3H20v16H6.5A2.5 2.5 0 0 0 4 21.5zM4 5.5v16M8 7h8", Moon: "M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5Z", Sun: "M12 3v2M12 19v2M3 12h2M19 12h2m-2.64-6.64-1.41 1.41M7.05 16.95l-1.41 1.41m0-12.72 1.41 1.41m9.9 9.9 1.41 1.41M15.5 12a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0Z", Exit: "M10 17l5-5-5-5M15 12H3m9-8h6a3 3 0 0 1 3 3v10a3 3 0 0 1-3 3h-6", Close: "m6 6 12 12M18 6 6 18", Play: "m9 6 9 6-9 6z", PanelLeft: "M4 4h16v16H4zM10 4v16M7 8v8", User: "M20 21a8 8 0 0 0-16 0M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8" };
   return <svg aria-hidden="true" className="icon" fill="none" viewBox="0 0 24 24"><path d={paths[name]} stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.7" /></svg>;
 }
