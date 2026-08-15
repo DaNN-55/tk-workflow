@@ -32,6 +32,11 @@ export interface WorkerTaskPackageInput {
     creativeDirection: string;
     coreContent: string;
   };
+  seriesBaseline?: {
+    versionId: string;
+    version: number;
+    rules: unknown;
+  };
   reviewFeedback?: {
     reviewPackageId: string;
     reason: string;
@@ -56,6 +61,11 @@ export interface WorkerTaskPackage {
   commission?: {
     creativeDirection: string;
     coreContent: string;
+  };
+  seriesBaseline?: {
+    versionId: string;
+    version: number;
+    rules: unknown;
   };
   reviewFeedback?: {
     reviewPackageId: string;
@@ -112,6 +122,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
   if (!isNonEmptyString(input.task.type)) throw new Error("task type is required.");
   if (!isNonEmptyString(input.capability)) throw new Error("capability is required.");
   if (input.commission && (!isNonEmptyString(input.commission.creativeDirection) || !isNonEmptyString(input.commission.coreContent))) throw new Error("commission must contain creative direction and core content.");
+  if (input.seriesBaseline && (!isNonEmptyString(input.seriesBaseline.versionId) || !Number.isInteger(input.seriesBaseline.version) || input.seriesBaseline.version < 1 || !isRecord(input.seriesBaseline.rules))) throw new Error("seriesBaseline must contain a version and rule object.");
   if (input.reviewFeedback && (!isNonEmptyString(input.reviewFeedback.reviewPackageId) || !isNonEmptyString(input.reviewFeedback.reason))) throw new Error("review feedback must contain its package and reason.");
   if (input.allowedTools.some((tool) => !isNonEmptyString(tool))) throw new Error("allowedTools must contain non-empty names.");
   if (input.output.requiredArtifactTypes.length === 0 || input.output.requiredArtifactTypes.some((artifactType) => !isNonEmptyString(artifactType))) throw new Error("至少需要一个输出产物类型。");
@@ -126,6 +137,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     promptVersion: input.task.promptVersion,
     capability: input.capability,
     ...(input.commission ? { commission: { creativeDirection: input.commission.creativeDirection, coreContent: input.commission.coreContent } } : {}),
+    ...(input.seriesBaseline ? { seriesBaseline: { versionId: input.seriesBaseline.versionId, version: input.seriesBaseline.version, rules: input.seriesBaseline.rules } } : {}),
     ...(input.reviewFeedback ? { reviewFeedback: { reviewPackageId: input.reviewFeedback.reviewPackageId, reason: input.reviewFeedback.reason } } : {}),
     allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
@@ -161,6 +173,9 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
   }
   if (value.status === "completed" && !taskPackage.output.requiredArtifactTypes.every((artifactType) => artifacts.some((artifact) => artifact.artifactType === artifactType))) {
     throw new Error("已完成结果缺少必需产物。");
+  }
+  if (value.status === "completed" && artifacts.some((artifact) => artifact.artifactType === "static_visual" && !isPreviewableImagePath(artifact.relativePath))) {
+    throw new Error("静态视觉产物必须使用可预览图片路径。");
   }
   if (value.status === "completed" && !artifacts.some((artifact) => artifact.artifactType === taskPackage.output.requiredArtifactTypes[0] && artifact.relativePath === taskPackage.output.relativePath)) {
     throw new Error("已完成结果未使用任务包冻结输出路径。");
@@ -231,4 +246,8 @@ function isSafeRelativePath(value: unknown): value is string {
     && !value.startsWith("\\")
     && !/^[a-zA-Z]:[\\/]/.test(value)
     && !value.split(/[\\/]/).some((segment) => segment === "" || segment === "." || segment === "..");
+}
+
+function isPreviewableImagePath(value: string): boolean {
+  return /\.(avif|gif|jpe?g|png|svg|webp)$/i.test(value);
 }

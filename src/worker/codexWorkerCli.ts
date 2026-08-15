@@ -165,6 +165,7 @@ function buildCodexPrompt(taskPackage: WorkerTaskPackage): string {
     "Work only inside assets.allowedRoot. Do not inspect, modify, or transmit files outside that directory.",
     "Use only the tools listed in allowedTools. If the task cannot be completed with them, return blocked instead of substituting another tool.",
     "allowedTools is a capability policy, not a list of Codex tool names. When it includes read and write, use your normal workspace filesystem tools only to read and write within assets.allowedRoot.",
+    "When task package includes seriesBaseline, it is an approved, frozen reusable base. For visual planning, do not regenerate covered characters, voices, or visual references; create only additions or explicit deviations. Produce every output.requiredArtifactTypes, with the primary artifact at output.relativePath. Visual reference groups must be organized by character, location, and key prop; static visuals must be previewable images (SVG is allowed).",
     "Do not approve, publish, change any blueprint, call platform APIs, or change an Episode stage.",
     "If any required input, tool, permission, or rule is missing, return status blocked with explicit blockers; do not silently substitute a provider.",
     `Create the required artifact at output.relativePath inside episodes/${taskPackage.episode.id}/ and return a JSON result that matches the provided schema. Use paths relative to assets.allowedRoot and SHA-256 hashes in lowercase hexadecimal.`,

@@ -49,6 +49,23 @@ describe("Worker 契约", () => {
     });
   });
 
+  it("把固定的系列基准原样放入视觉 Worker 任务包", () => {
+    const taskPackage = createWorkerTaskPackage({
+      ...packageInput,
+      seriesBaseline: {
+        versionId: "series-version-3",
+        version: 3,
+        rules: { characters: [{ name: "林砚", visual: "深色雨衣" }], visual_style: "写实雨夜" },
+      },
+    });
+
+    expect(taskPackage.seriesBaseline).toEqual({
+      versionId: "series-version-3",
+      version: 3,
+      rules: { characters: [{ name: "林砚", visual: "深色雨衣" }], visual_style: "写实雨夜" },
+    });
+  });
+
   it("拒绝缺少资产根目录或预算已耗尽的任务包", () => {
     expect(() => createWorkerTaskPackage({ ...packageInput, allowedAssetRoot: "" })).toThrow("allowedAssetRoot");
     expect(() => createWorkerTaskPackage({ ...packageInput, task: { ...packageInput.task, attempt: 2 } })).toThrow("maxAttempts");
@@ -172,5 +189,28 @@ describe("Worker 契约", () => {
       retry: { shouldRetry: false, reason: "Completed successfully." },
       nextStep: "Continue.",
     }, taskPackage)).toThrow("冻结输出路径");
+  });
+
+  it("要求静态视觉产物使用可预览图片路径", () => {
+    const taskPackage = createWorkerTaskPackage({
+      ...packageInput,
+      output: { ...packageInput.output, requiredArtifactTypes: ["visual_brief", "visual_reference_group", "static_visual"], relativePath: "episodes/episode-1/visual-brief.md" },
+    });
+
+    expect(() => validateWorkerResult({
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "completed",
+      artifacts: [
+        { artifactType: "visual_brief", relativePath: "episodes/episode-1/visual-brief.md", sha256: "c".repeat(64), fileSize: 256 },
+        { artifactType: "visual_reference_group", relativePath: "episodes/episode-1/references.md", sha256: "d".repeat(64), fileSize: 256 },
+        { artifactType: "static_visual", relativePath: "episodes/episode-1/static-visual.md", sha256: "e".repeat(64), fileSize: 256 },
+      ],
+      validation: { passed: true, checks: [{ name: "schema", passed: true, detail: "valid" }] },
+      actualCostCents: 0,
+      blockers: [],
+      retry: { shouldRetry: false, reason: "Completed successfully." },
+      nextStep: "Continue.",
+    }, taskPackage)).toThrow("可预览图片");
   });
 });

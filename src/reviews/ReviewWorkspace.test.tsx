@@ -308,9 +308,21 @@ describe("审核台", () => {
       producer_task_id: "task-visual-1",
       relative_path: "episodes/episode-review/visual-brief-v1.md",
     };
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("# 视觉方案\n\n第一镜：雨夜古宅。", { status: 200, headers: { "Content-Type": "text/markdown" } })));
+    const referenceGroup: Artifact = {
+      ...visualBrief,
+      artifact_type: "visual_reference_group",
+      id: "artifact-visual-references",
+      relative_path: "episodes/episode-review/visual-references/characters.md",
+    };
+    const staticVisual: Artifact = {
+      ...visualBrief,
+      artifact_type: "static_visual",
+      id: "artifact-static-visual",
+      relative_path: "episodes/episode-review/visuals/lin-yan.svg",
+    };
+    vi.stubGlobal("fetch", vi.fn().mockImplementation((source: string) => Promise.resolve(new Response(source.includes("visual-references") ? "# 角色\n\n林砚：雨夜深色雨衣。" : "# 视觉方案\n\n第一镜：雨夜古宅。", { status: 200, headers: { "Content-Type": "text/markdown" } }))));
 
-    render(<EpisodeDetail {...materialInputProps} artifacts={[visualBrief]} blueprint={blueprint} episode={visualEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={onTransition} reviewPackages={[{
+    render(<EpisodeDetail {...materialInputProps} artifacts={[visualBrief, referenceGroup, staticVisual]} blueprint={blueprint} episode={visualEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateLocalDirectory={vi.fn()} onTransition={onTransition} reviewPackages={[{
       artifact_id: visualBrief.id,
       context_snapshot: {
         allowed_tools: ["read", "write"],
@@ -318,7 +330,8 @@ describe("审核台", () => {
         budget: { limit_cents: 120 },
         capability: "visual_planning",
         executor: { model: "gpt-5.6-codex", provider: "codex" },
-        output: { content_type: "text/markdown", required_artifact_types: ["visual_brief"] },
+        output: { content_type: "text/markdown", required_artifact_types: ["visual_brief", "visual_reference_group", "static_visual"] },
+        series_baseline: { version_id: "series-version-3", version: 3, rules: { visual_style: "写实雨夜" } },
         script_revision: { sha256: "b".repeat(64) },
       },
       created_at: "2026-08-14T00:00:00.000Z",
@@ -337,6 +350,11 @@ describe("审核台", () => {
     expect(screen.getByText("120 分")).toBeTruthy();
     expect(screen.getByText("read、write")).toBeTruthy();
     expect(screen.getByText(`${"b".repeat(12)}…`)).toBeTruthy();
+    expect(screen.getByText("系列基准 · v3")).toBeTruthy();
+    expect(screen.getByText('{"visual_style":"写实雨夜"}')).toBeTruthy();
+    expect(screen.getByText("角色 / 地点 / 关键道具参考组")).toBeTruthy();
+    expect(await screen.findByText("林砚：雨夜深色雨衣。", { exact: false })).toBeTruthy();
+    expect(screen.getByText("所需静态视觉")).toBeTruthy();
 
     await user.type(screen.getByLabelText("审批理由"), "视觉方向清晰，符合主脚本。");
     await user.click(screen.getByRole("button", { name: "批准" }));

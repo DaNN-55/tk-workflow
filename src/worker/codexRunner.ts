@@ -98,12 +98,24 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
     },
     capability: requiredString(snapshot.capability, "任务缺少能力声明。"),
     commission: commission(snapshot),
+    seriesBaseline: seriesBaseline(snapshot),
     reviewFeedback: reviewFeedback(snapshot),
     allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
     output,
     inputArtifacts: inputArtifacts(snapshot),
   });
+}
+
+function seriesBaseline(snapshot: Record<string, unknown>): WorkerTaskPackageInput["seriesBaseline"] {
+  const value = snapshot.series_baseline;
+  if (value === undefined) return undefined;
+  if (!isRecord(value) || !isRecord(value.rules) || typeof value.version !== "number" || !Number.isInteger(value.version) || value.version < 1) throw new Error("任务系列基准格式无效。");
+  return {
+    versionId: requiredString(value.version_id, "任务系列基准缺少版本。"),
+    version: value.version,
+    rules: value.rules,
+  };
 }
 
 function commission(snapshot: Record<string, unknown>): WorkerTaskPackageInput["commission"] {

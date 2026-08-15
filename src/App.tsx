@@ -193,7 +193,7 @@ function localArtifactUrl(episodeId: string, relativePath: string, expectedSha25
 
 function artifactPreviewKind(relativePath: string): "image" | "video" | null {
   const path = relativePath.toLowerCase();
-  if (/\.(avif|gif|jpe?g|png|webp)$/.test(path)) return "image";
+  if (/\.(avif|gif|jpe?g|png|svg|webp)$/.test(path)) return "image";
   if (/\.(mp4|mov|webm)$/.test(path)) return "video";
   return null;
 }
@@ -1008,6 +1008,7 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
   const reviewAction = reviewActionFor(episode.stage);
   const reviewPackage = reviewPackages.find((candidate) => candidate.episode_id === episode.id);
   const reviewArtifact = reviewPackage ? episodeArtifacts.find((candidate) => candidate.id === reviewPackage.artifact_id) : null;
+  const reviewArtifacts = reviewPackage ? episodeArtifacts.filter((candidate) => candidate.producer_task_id === reviewPackage.task_id) : [];
   const [directoryMessage, setDirectoryMessage] = useState("");
 
   async function copyEpisodeId() {
@@ -1028,8 +1029,8 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     <MaterialImportForm episodeId={episode.id} isPending={isMaterialPending} onImport={onImportMaterial} />
     <section className="review-section"><h3>生产材料修订</h3>{episodeMaterials.length ? episodeMaterials.map((revision) => <div className="material-revision" key={revision.id}><strong>{revision.is_main_script ? "主脚本" : revision.material_type} · v{revision.revision_number}</strong><span>{revision.source_kind} · {revision.source_path}</span><code>{revision.sha256.slice(0, 12)}… · {revision.storage_path}</code></div>) : <p className="muted-copy">还没有导入材料修订。</p>}</section>
     <div className="stage-heading"><span>当前阶段</span><strong className={`stage stage-${stageTone(episode.stage)}`}>{stageLabels[episode.stage]}</strong></div>
-    <ArtifactPreview artifacts={episodeArtifacts} />
-    {reviewPackage && reviewArtifact ? <TextReviewPackage artifact={reviewArtifact} reviewPackage={reviewPackage} /> : null}
+    {reviewPackage?.stage !== "visual_review" ? <ArtifactPreview artifacts={episodeArtifacts} /> : null}
+    {reviewPackage && reviewArtifact ? reviewPackage.stage === "visual_review" ? <VisualReviewPackage artifact={reviewArtifact} artifacts={reviewArtifacts} reviewPackage={reviewPackage} /> : <TextReviewPackage artifact={reviewArtifact} reviewPackage={reviewPackage} /> : null}
     <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
     {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
     {reviewAction ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} /> : null}
@@ -1120,6 +1121,7 @@ interface FrozenReviewContext {
   provider: string;
   requiredArtifactTypes: string[];
   input: FrozenReviewInput;
+  seriesBaseline?: { versionId: string; version: number; rules: Json };
 }
 
 type FrozenReviewInput =
@@ -1134,6 +1136,7 @@ function parseFrozenReviewContext(snapshot: Json): FrozenReviewContext | null {
   const output = snapshot.output;
   const scriptRevision = snapshot.script_revision;
   const commission = snapshot.commission;
+  const seriesBaseline = snapshot.series_baseline;
   if (!executor || Array.isArray(executor) || typeof executor !== "object" || !artifact || Array.isArray(artifact) || typeof artifact !== "object" || !budget || Array.isArray(budget) || typeof budget !== "object" || !output || Array.isArray(output) || typeof output !== "object") return null;
   const budgetLimitCents = budget.limit_cents;
   if (typeof snapshot.capability !== "string" || typeof artifact.relative_path !== "string" || typeof artifact.sha256 !== "string" || typeof executor.provider !== "string" || typeof executor.model !== "string" || typeof budgetLimitCents !== "number" || !Number.isInteger(budgetLimitCents) || budgetLimitCents < 0 || !Array.isArray(snapshot.allowed_tools) || snapshot.allowed_tools.some((tool) => typeof tool !== "string") || typeof output.content_type !== "string" || !Array.isArray(output.required_artifact_types) || output.required_artifact_types.some((artifactType) => typeof artifactType !== "string")) return null;
@@ -1143,6 +1146,9 @@ function parseFrozenReviewContext(snapshot: Json): FrozenReviewContext | null {
       ? { kind: "commission" as const, creativeDirection: commission.creative_direction, coreContent: commission.core_content }
       : null;
   if (!input) return null;
+  const parsedSeriesBaseline = seriesBaseline && !Array.isArray(seriesBaseline) && typeof seriesBaseline === "object" && typeof seriesBaseline.version_id === "string" && typeof seriesBaseline.version === "number" && Number.isInteger(seriesBaseline.version) && seriesBaseline.version > 0 && seriesBaseline.rules && !Array.isArray(seriesBaseline.rules) && typeof seriesBaseline.rules === "object"
+    ? { versionId: seriesBaseline.version_id, version: seriesBaseline.version, rules: seriesBaseline.rules as Json }
+    : undefined;
   return {
     allowedTools: snapshot.allowed_tools as string[],
     artifactRelativePath: artifact.relative_path,
@@ -1154,15 +1160,21 @@ function parseFrozenReviewContext(snapshot: Json): FrozenReviewContext | null {
     provider: executor.provider,
     requiredArtifactTypes: output.required_artifact_types as string[],
     input,
+    ...(parsedSeriesBaseline ? { seriesBaseline: parsedSeriesBaseline } : {}),
   };
 }
 
 function TextReviewPackage({ artifact, reviewPackage }: { artifact: Artifact; reviewPackage: ReviewPackage }) {
-  const [content, setContent] = useState("");
-  const [error, setError] = useState("");
   const context = parseFrozenReviewContext(reviewPackage.context_snapshot);
   const artifactMatchesContext = context?.artifactRelativePath === artifact.relative_path && context.artifactSha256 === artifact.sha256;
   const source = artifactMatchesContext ? localArtifactUrl(artifact.episode_id, context.artifactRelativePath, context.artifactSha256) : null;
+
+  return <section className="review-section text-review-package"><h3>可审核文本 · 修订 v{reviewPackage.revision_number}</h3><TextArtifactContent source={source} /><h4>冻结审核上下文</h4>{context ? <dl>{context.input.kind === "provided_script" ? <div><dt>主脚本 SHA-256</dt><dd>{context.input.scriptSha256.slice(0, 12)}…</dd></div> : <><div><dt>创作方向</dt><dd>{context.input.creativeDirection}</dd></div><div><dt>核心内容</dt><dd>{context.input.coreContent}</dd></div></>}{context.seriesBaseline ? <><div><dt>系列基准</dt><dd>系列基准 · v{context.seriesBaseline.version}</dd></div><div><dt>冻结系列规则</dt><dd><code>{JSON.stringify(context.seriesBaseline.rules)}</code></dd></div></> : null}<div><dt>能力</dt><dd>{context.capability}</dd></div><div><dt>执行器</dt><dd>{context.provider} · <span>{context.model}</span></dd></div><div><dt>预算</dt><dd>{context.budgetLimitCents} 分</dd></div><div><dt>允许工具</dt><dd>{context.allowedTools.join("、") || "无"}</dd></div><div><dt>输出契约</dt><dd>{context.contentType} · {context.requiredArtifactTypes.join("、")}</dd></div></dl> : <p className="form-error">冻结审核上下文格式无效。</p>}</section>;
+}
+
+function TextArtifactContent({ source }: { source: string | null }) {
+  const [content, setContent] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     let isCurrent = true;
@@ -1183,7 +1195,13 @@ function TextReviewPackage({ artifact, reviewPackage }: { artifact: Artifact; re
     return () => { isCurrent = false; };
   }, [source]);
 
-  return <section className="review-section text-review-package"><h3>可审核文本 · 修订 v{reviewPackage.revision_number}</h3>{error ? <p className="form-error">{error}</p> : content ? <pre>{content}</pre> : <p className="muted-copy">正在读取文本产物…</p>}<h4>冻结审核上下文</h4>{context ? <dl>{context.input.kind === "provided_script" ? <div><dt>主脚本 SHA-256</dt><dd>{context.input.scriptSha256.slice(0, 12)}…</dd></div> : <><div><dt>创作方向</dt><dd>{context.input.creativeDirection}</dd></div><div><dt>核心内容</dt><dd>{context.input.coreContent}</dd></div></>}<div><dt>能力</dt><dd>{context.capability}</dd></div><div><dt>执行器</dt><dd>{context.provider} · <span>{context.model}</span></dd></div><div><dt>预算</dt><dd>{context.budgetLimitCents} 分</dd></div><div><dt>允许工具</dt><dd>{context.allowedTools.join("、") || "无"}</dd></div><div><dt>输出契约</dt><dd>{context.contentType} · {context.requiredArtifactTypes.join("、")}</dd></div></dl> : <p className="form-error">冻结审核上下文格式无效。</p>}</section>;
+  return error ? <p className="form-error">{error}</p> : content ? <pre>{content}</pre> : <p className="muted-copy">正在读取文本产物…</p>;
+}
+
+function VisualReviewPackage({ artifact, artifacts, reviewPackage }: { artifact: Artifact; artifacts: Artifact[]; reviewPackage: ReviewPackage }) {
+  const referenceGroups = artifacts.filter((candidate) => candidate.artifact_type === "visual_reference_group");
+  const staticVisuals = artifacts.filter((candidate) => candidate.artifact_type === "static_visual");
+  return <><TextReviewPackage artifact={artifact} reviewPackage={reviewPackage} /><section className="review-section"><h3>角色 / 地点 / 关键道具参考组</h3>{referenceGroups.length ? referenceGroups.map((candidate) => <div key={candidate.id}><Artifact complete label={candidate.artifact_type} name={candidate.relative_path} /><TextArtifactContent source={localArtifactUrl(candidate.episode_id, candidate.relative_path, candidate.sha256)} /></div>) : <p className="form-error">视觉审核包缺少参考组。</p>}</section><section className="review-section"><h3>所需静态视觉</h3><ArtifactPreview artifacts={staticVisuals} />{staticVisuals.map((candidate) => <Artifact complete key={candidate.id} label={candidate.artifact_type} name={candidate.relative_path} />)}</section></>;
 }
 
 function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {

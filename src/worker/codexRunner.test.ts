@@ -92,6 +92,39 @@ describe("本地 Codex Worker runner", () => {
     }));
   });
 
+  it("把已冻结的系列基准原样交给视觉 Worker", async () => {
+    const execute = vi.fn().mockResolvedValue(JSON.stringify({
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "completed",
+      artifacts: [{ artifactType: "visual_brief", relativePath: "episodes/episode-1/brief.md", sha256: "a".repeat(64), fileSize: 128 }],
+      validation: { passed: true, checks: [{ name: "schema", passed: true, detail: "visual brief is complete" }] },
+      actualCostCents: 0,
+      blockers: [],
+      retry: { shouldRetry: false, reason: "Completed successfully." },
+      nextStep: "Submit the visual package for Owner review.",
+    }));
+
+    await runCodexWorker({
+      claimNextTask: async () => ({
+        ...claimedTask,
+        inputSnapshot: {
+          ...claimedTask.inputSnapshot,
+          series_baseline: { version_id: "series-version-3", version: 3, rules: { visual_style: "写实雨夜" } },
+        },
+      }),
+      reportResult: vi.fn().mockResolvedValue(undefined),
+      execute,
+      verifyAssetRoot: async () => undefined,
+      verifyArtifacts: async () => undefined,
+      actualCostCents: 0,
+    });
+
+    expect(execute).toHaveBeenCalledWith(expect.objectContaining({
+      seriesBaseline: { versionId: "series-version-3", version: 3, rules: { visual_style: "写实雨夜" } },
+    }));
+  });
+
   it("缺少资产根目录时写入 blocked，不调用 Codex", async () => {
     const execute = vi.fn();
     const reportResult = vi.fn().mockResolvedValue(undefined);
