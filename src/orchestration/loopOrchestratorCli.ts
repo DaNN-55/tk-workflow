@@ -51,7 +51,8 @@ async function planWorkerTasks(): Promise<Array<{ id: string }>> {
     orchestrateTasks("orchestrate_storyboard_tasks"),
   ]);
   const aRollTasks = await orchestrateTasks("orchestrate_a_roll_tasks");
-  return [...visualTasks, ...storyboardTasks, ...aRollTasks];
+  const bRollTasks = await orchestrateTasks("orchestrate_b_roll_tasks");
+  return [...visualTasks, ...storyboardTasks, ...aRollTasks, ...bRollTasks];
 }
 
 async function orchestrateTasks(functionName: string): Promise<Array<{ id: string }>> {
@@ -77,7 +78,7 @@ async function notifyFor(kind: "approval" | "state"): Promise<void> {
     ? selection.approvalStages.map((stage) => ({ title: "需要人工审批", body: `有 Episode 进入 ${stage}，请在控制台处理。` }))
     : [
       ...selection.stateStages.map((stage) => ({ title: "Episode 状态已变更", body: `有 Episode 进入 ${stage}，请在控制台查看。` })),
-      ...selection.blockerDetails.map((detail) => ({ title: "A-roll 任务已阻塞", body: detail })),
+      ...selection.blockerDetails.map((detail) => ({ title: "媒体任务已阻塞", body: detail })),
     ];
 
   for (const notification of notifications) await showNotification(notification.title, notification.body);
@@ -114,7 +115,7 @@ async function fetchAuditEvents(cursor: NotificationCursor | null): Promise<Audi
   const { url, serviceRoleKey } = supabaseCredentials();
   const endpoint = new URL("/rest/v1/audit_events", url);
   endpoint.searchParams.set("select", "id,created_at,event_type,payload");
-  endpoint.searchParams.set("event_type", "in.(stage_transition,a_roll_task_blocked)");
+  endpoint.searchParams.set("event_type", "in.(stage_transition,a_roll_task_blocked,b_roll_task_blocked)");
   endpoint.searchParams.set("order", "created_at.asc,id.asc");
   endpoint.searchParams.set("limit", "1000");
   if (cursor) endpoint.searchParams.set("created_at", `gte.${cursor.createdAt}`);
