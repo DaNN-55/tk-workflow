@@ -36,7 +36,7 @@ export function collectNotifications(
       if (!stage) continue;
       if (stage.endsWith("_review")) approvalStages.push(stage);
       else stateStages.push(stage);
-    } else if (event.eventType === "a_roll_task_blocked") {
+    } else if (event.eventType === "a_roll_task_blocked" || event.eventType === "b_roll_task_blocked") {
       const detail = blockerDetailFromPayload(event.payload);
       if (detail) blockerDetails.push(detail);
     }

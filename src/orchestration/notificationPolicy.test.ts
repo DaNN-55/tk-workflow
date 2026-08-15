@@ -15,6 +15,12 @@ const events: AuditEvent[] = [
     payload: { code: "a_roll_executor_missing", detail: "未配置执行器。", shot_id: "shot-01" },
   },
   {
+    id: "event-5",
+    createdAt: "2026-08-12T10:04:00.000Z",
+    eventType: "b_roll_task_blocked",
+    payload: { code: "b_roll_executor_missing", detail: "未配置执行器。", shot_id: "shot-02" },
+  },
+  {
     id: "event-2",
     createdAt: "2026-08-12T10:01:00.000Z",
     eventType: "stage_transition",
@@ -34,16 +40,19 @@ describe("n8n 通知策略", () => {
       approvalStages: [],
       blockerDetails: [],
       stateStages: [],
-      nextCursor: { createdAt: "2026-08-12T10:03:00.000Z", id: "event-4" },
+      nextCursor: { createdAt: "2026-08-12T10:04:00.000Z", id: "event-5" },
     });
   });
 
   it("把审核状态与普通状态迁移分开通知", () => {
     expect(collectNotifications(events, { createdAt: "2026-08-12T09:59:00.000Z", id: "" })).toEqual({
       approvalStages: ["script_review"],
-      blockerDetails: ["shot-01 · a_roll_executor_missing: 未配置执行器。"],
+      blockerDetails: [
+        "shot-01 · a_roll_executor_missing: 未配置执行器。",
+        "shot-02 · b_roll_executor_missing: 未配置执行器。",
+      ],
       stateStages: ["script_approved"],
-      nextCursor: { createdAt: "2026-08-12T10:03:00.000Z", id: "event-4" },
+      nextCursor: { createdAt: "2026-08-12T10:04:00.000Z", id: "event-5" },
     });
   });
 
