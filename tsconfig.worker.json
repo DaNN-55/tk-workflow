@@ -21,6 +21,7 @@
     "src/publishing/publishPackage.ts",
     "src/publishing/publishContext.ts",
     "src/publishing/publishPackageCli.ts",
-    "src/publishing/publishPackageVerifyCli.ts"
+    "src/publishing/publishPackageVerifyCli.ts",
+    "src/publishing/publishInputCli.ts"
   ]
 }

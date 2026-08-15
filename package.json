@@ -12,6 +12,7 @@
     "worker:build": "tsc -p tsconfig.worker.json",
     "worker:run": "npm run worker:build && node dist/worker/worker/codexWorkerCli.js",
     "publish:prepare": "npm run worker:build && node dist/worker/publishing/publishPackageCli.js",
+    "publish:register-input": "npm run worker:build && node dist/worker/publishing/publishInputCli.js",
     "publish:verify": "npm run worker:build && node dist/worker/publishing/publishPackageVerifyCli.js",
     "orchestrator:build": "tsc -p tsconfig.orchestrator.json",
     "orchestrator:run": "npm run orchestrator:build && node dist/orchestration/orchestration/loopOrchestratorCli.js",
