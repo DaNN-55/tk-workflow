@@ -197,6 +197,7 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
   const storyboard = taskPackage.capability === "storyboard_planning" && value.status === "completed"
     ? validateStoryboardManifest(value.storyboard, taskPackage.assets.inputs)
     : undefined;
+  if (taskPackage.capability === "storyboard_planning" && value.status !== "completed" && value.storyboard !== null) throw new Error("未完成的分镜任务必须返回空分镜内容。");
   if (taskPackage.capability !== "storyboard_planning" && value.storyboard !== undefined) throw new Error("非分镜任务不能返回分镜内容。");
   if (value.status === "completed" && (!value.validation.passed || value.artifacts.length === 0 || value.blockers.length > 0)) {
     throw new Error("已完成结果必须包含通过验证的产物，且不能带有 blockers。");

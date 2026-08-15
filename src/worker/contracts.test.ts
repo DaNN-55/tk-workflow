@@ -139,6 +139,29 @@ describe("Worker 契约", () => {
     }, createWorkerTaskPackage({ ...packageInput, task: { ...packageInput.task, attempt: 1 } }))).toThrow("重试");
   });
 
+  it("允许分镜任务在阻塞时返回空分镜内容", () => {
+    const taskPackage = createWorkerTaskPackage({
+      ...packageInput,
+      capability: "storyboard_planning",
+      output: { requiredArtifactTypes: ["storyboard"], contentType: "application/json", relativePath: "episodes/episode-1/storyboard-v1.json", reviewStage: "storyboard_review" },
+    });
+    const blockedResult = {
+      version: "worker-result/v1",
+      taskId: "task-1",
+      status: "blocked",
+      artifacts: [],
+      storyboard: null,
+      validation: { passed: false, checks: [] },
+      actualCostCents: 0,
+      blockers: [{ code: "missing_input", detail: "Approved visual input is missing." }],
+      retry: { shouldRetry: false, reason: "Owner action is required." },
+      nextStep: "Provide the approved visual input.",
+    };
+
+    expect(validateWorkerResult(blockedResult, taskPackage)).toMatchObject({ status: "blocked" });
+    expect(() => validateWorkerResult({ ...blockedResult, storyboard: undefined }, taskPackage)).toThrow("空分镜内容");
+  });
+
   it("要求结果匹配任务输出类型，并使用资产根目录下的相对路径", () => {
     const taskPackage = createWorkerTaskPackage(packageInput);
 
