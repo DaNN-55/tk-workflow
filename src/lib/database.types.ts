@@ -206,6 +206,46 @@ export type Database = {
           },
         ]
       }
+      audio_track_annotations: {
+        Row: {
+          at_seconds: number
+          audio_track_id: string
+          author_id: string
+          created_at: string
+          id: string
+          reason: string
+        }
+        Insert: { at_seconds: number; audio_track_id: string; author_id: string; created_at?: string; id?: string; reason: string }
+        Update: { at_seconds?: number; audio_track_id?: string; author_id?: string; created_at?: string; id?: string; reason?: string }
+        Relationships: [{ foreignKeyName: "audio_track_annotations_audio_track_id_fkey"; columns: ["audio_track_id"]; isOneToOne: false; referencedRelation: "audio_tracks"; referencedColumns: ["id"] }]
+      }
+      audio_tracks: {
+        Row: {
+          created_at: string
+          cue_id: string | null
+          duration_seconds: number
+          episode_id: string
+          file_size: number
+          id: string
+          relative_path: string
+          sha256: string
+          source_artifact_id: string
+          source_material_revision_id: string | null
+          source_review_package_id: string | null
+          source_task_id: string
+          start_seconds: number
+          track_kind: string
+        }
+        Insert: { created_at?: string; cue_id?: string | null; duration_seconds: number; episode_id: string; file_size: number; id?: string; relative_path: string; sha256: string; source_artifact_id: string; source_material_revision_id?: string | null; source_review_package_id?: string | null; source_task_id: string; start_seconds?: number; track_kind: string }
+        Update: { created_at?: string; cue_id?: string | null; duration_seconds?: number; episode_id?: string; file_size?: number; id?: string; relative_path?: string; sha256?: string; source_artifact_id?: string; source_material_revision_id?: string | null; source_review_package_id?: string | null; source_task_id?: string; start_seconds?: number; track_kind?: string }
+        Relationships: [
+          { foreignKeyName: "audio_tracks_episode_id_fkey"; columns: ["episode_id"]; isOneToOne: false; referencedRelation: "episodes"; referencedColumns: ["id"] },
+          { foreignKeyName: "audio_tracks_source_artifact_id_fkey"; columns: ["source_artifact_id"]; isOneToOne: true; referencedRelation: "artifacts"; referencedColumns: ["id"] },
+          { foreignKeyName: "audio_tracks_source_material_revision_id_fkey"; columns: ["source_material_revision_id"]; isOneToOne: false; referencedRelation: "production_material_revisions"; referencedColumns: ["id"] },
+          { foreignKeyName: "audio_tracks_source_review_package_id_fkey"; columns: ["source_review_package_id"]; isOneToOne: false; referencedRelation: "review_packages"; referencedColumns: ["id"] },
+          { foreignKeyName: "audio_tracks_source_task_id_fkey"; columns: ["source_task_id"]; isOneToOne: true; referencedRelation: "tasks"; referencedColumns: ["id"] },
+        ]
+      }
       blueprint_change_suggestions: {
         Row: {
           account_id: string
@@ -958,11 +998,21 @@ export type Database = {
         Returns: Database["public"]["Tables"]["review_annotations"]["Row"]
         SetofOptions: { from: "*"; to: "review_annotations"; isOneToOne: true; isSetofReturn: false }
       }
+      create_audio_track_annotation: {
+        Args: { p_audio_track_id: string; p_at_seconds: number; p_reason: string }
+        Returns: Database["public"]["Tables"]["audio_track_annotations"]["Row"]
+        SetofOptions: { from: "*"; to: "audio_track_annotations"; isOneToOne: true; isSetofReturn: false }
+      }
       orchestrate_provided_script_tasks: {
         Args: Record<PropertyKey, never>
         Returns: Database["public"]["Tables"]["tasks"]["Row"][]
       }
       orchestrate_storyboard_tasks: {
+        Args: Record<PropertyKey, never>
+        Returns: Database["public"]["Tables"]["tasks"]["Row"][]
+        SetofOptions: { from: "*"; to: "tasks"; isOneToOne: false; isSetofReturn: true }
+      }
+      orchestrate_narration_tasks: {
         Args: Record<PropertyKey, never>
         Returns: Database["public"]["Tables"]["tasks"]["Row"][]
         SetofOptions: { from: "*"; to: "tasks"; isOneToOne: false; isSetofReturn: true }

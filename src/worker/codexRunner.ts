@@ -13,7 +13,7 @@ export interface ClaimedWorkerTask {
   attempt: number;
   budgetLimitCents: number;
   maxAttempts: number;
-  provider: "codex";
+  provider: "codex" | "google_tts" | "pexels" | "ffmpeg";
   model: string;
   promptVersion: string;
   episodeId: string;
@@ -102,11 +102,86 @@ function createTaskPackage(task: ClaimedWorkerTask): WorkerTaskPackage {
     reviewFeedback: reviewFeedback(snapshot),
     reviewAnnotations: reviewAnnotations(snapshot),
     aRoll: aRoll(snapshot),
+    media: media(snapshot),
     allowedTools: stringArray(snapshot.allowed_tools, "任务允许工具清单格式无效。"),
     allowedAssetRoot: task.allowedAssetRoot,
     output,
     inputArtifacts: inputArtifacts(snapshot),
   });
+}
+
+function media(snapshot: Record<string, unknown>): WorkerTaskPackageInput["media"] {
+  const value = snapshot.media;
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) throw new Error("媒体任务冻结配置格式无效。");
+  if (value.adapter === "google_tts") {
+    const narration = value.narration;
+    if (!isRecord(narration) || !isRecord(narration.voice)) throw new Error("旁白任务冻结配置无效。");
+    return {
+      adapter: "google_tts",
+      narration: {
+        text: requiredString(narration.text, "旁白任务缺少冻结文本。"),
+        voice: {
+          languageCode: requiredString(narration.voice.language_code, "旁白任务缺少语言。"),
+          name: requiredString(narration.voice.name, "旁白任务缺少声音。"),
+          speakingRate: requiredPositiveNumber(narration.voice.speaking_rate, "旁白任务缺少有效语速。"),
+        },
+      },
+    };
+  }
+  if (value.adapter === "pexels_video") {
+    const bRoll = value.b_roll;
+    if (!isRecord(bRoll) || !isRecord(bRoll.shot) || !Array.isArray(bRoll.shot.inputBasis)) throw new Error("B-roll 任务冻结配置无效。");
+    return {
+      adapter: "pexels_video",
+      bRoll: {
+        query: requiredString(bRoll.query, "B-roll 任务缺少冻结检索词。"),
+        targetDurationSeconds: requiredPositiveNumber(bRoll.target_duration_seconds, "B-roll 任务缺少有效时长。"),
+        shot: {
+          id: requiredString(bRoll.shot.id, "B-roll 任务缺少镜头 ID。"),
+          scriptSegment: requiredString(bRoll.shot.scriptSegment, "B-roll 任务缺少脚本片段。"),
+          durationSeconds: requiredPositiveNumber(bRoll.shot.durationSeconds, "B-roll 任务缺少镜头时长。"),
+          shotType: requiredShotType(bRoll.shot.shotType),
+          productionMethod: requiredString(bRoll.shot.productionMethod, "B-roll 任务缺少制作方法。"),
+          inputBasis: bRoll.shot.inputBasis.map((input) => {
+            if (!isRecord(input)) throw new Error("B-roll 输入依据格式无效。");
+            return { relativePath: requiredString(input.relativePath, "B-roll 输入依据缺少路径。"), sha256: requiredString(input.sha256, "B-roll 输入依据缺少哈希。") };
+          }),
+          targetSpec: requiredString(bRoll.shot.targetSpec, "B-roll 任务缺少目标规格。"),
+        },
+      },
+    };
+  }
+  if (value.adapter === "ffmpeg_extract_audio") {
+    const embeddedAudio = value.embedded_audio;
+    if (!isRecord(embeddedAudio)) throw new Error("派生音频任务冻结配置无效。");
+    return {
+      adapter: "ffmpeg_extract_audio",
+      embeddedAudio: {
+        sourceRelativePath: requiredString(embeddedAudio.source_relative_path, "派生音频任务缺少冻结视频路径。"),
+        durationSeconds: requiredPositiveNumber(embeddedAudio.duration_seconds, "派生音频任务缺少有效时长。"),
+      },
+    };
+  }
+  if (value.adapter === "freesound_preview") {
+    const soundtrack = value.soundtrack;
+    if (!isRecord(soundtrack) || !isRecord(soundtrack.cue)) throw new Error("声轨任务冻结配置无效。");
+    return {
+      adapter: "freesound_preview",
+      soundtrack: {
+        query: requiredString(soundtrack.query, "声轨任务缺少冻结检索词。"),
+        targetDurationSeconds: requiredPositiveNumber(soundtrack.target_duration_seconds, "声轨任务缺少有效时长。"),
+        cue: {
+          id: requiredString(soundtrack.cue.id, "声轨任务缺少声轨 ID。"),
+          kind: requiredSoundtrackKind(soundtrack.cue.kind),
+          description: requiredString(soundtrack.cue.description, "声轨任务缺少声轨说明。"),
+          startSeconds: requiredNonNegativeNumber(soundtrack.cue.start_seconds, "声轨任务缺少有效起始时间。"),
+          durationSeconds: requiredPositiveNumber(soundtrack.cue.duration_seconds, "声轨任务缺少有效时长。"),
+        },
+      },
+    };
+  }
+  throw new Error("媒体任务声明了不支持的适配器。");
 }
 
 function seriesBaseline(snapshot: Record<string, unknown>): WorkerTaskPackageInput["seriesBaseline"] {
@@ -208,6 +283,16 @@ function requiredString(value: unknown, message: string): string {
 
 function requiredPositiveNumber(value: unknown, message: string): number {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) throw new Error(message);
+  return value;
+}
+
+function requiredNonNegativeNumber(value: unknown, message: string): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) throw new Error(message);
+  return value;
+}
+
+function requiredSoundtrackKind(value: unknown): "bgm" | "sfx" {
+  if (value !== "bgm" && value !== "sfx") throw new Error("声轨任务类型无效。");
   return value;
 }
 

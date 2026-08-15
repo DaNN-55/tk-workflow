@@ -10,5 +10,6 @@ export async function verifyReportedStoryboardArtifact(input: { assetRoot: strin
   } catch {
     throw new Error("分镜产物文件格式无效。");
   }
-  if (JSON.stringify(artifactStoryboard) !== JSON.stringify(input.storyboard)) throw new Error("分镜产物文件与 Worker 回报不一致。");
+  const reportedStoryboard = validateStoryboardManifest(input.storyboard, input.frozenInputs);
+  if (JSON.stringify(artifactStoryboard) !== JSON.stringify(reportedStoryboard)) throw new Error("分镜产物文件与 Worker 回报不一致。");
 }

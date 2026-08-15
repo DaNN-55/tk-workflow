@@ -89,6 +89,8 @@ const blockedTask: Task = {
 };
 
 const materialInputProps = {
+  audioTrackAnnotations: [],
+  audioTracks: [],
   isMaterialPending: false,
   isScriptCommissionPending: false,
   isStoryboardAnnotationPending: false,
@@ -97,6 +99,7 @@ const materialInputProps = {
   reviewAnnotations: [],
   reviewPackages: [],
   onCreateStoryboardAnnotation: vi.fn().mockResolvedValue(undefined),
+  onCreateAudioTrackAnnotation: vi.fn().mockResolvedValue(undefined),
   onImportMaterial: vi.fn().mockResolvedValue(undefined),
   onCommissionScript: vi.fn().mockResolvedValue(undefined),
   onUpdateTitle: vi.fn().mockResolvedValue(undefined),
@@ -167,6 +170,24 @@ describe("审核台", () => {
     await user.click(screen.getByRole("button", { name: "批准" }));
     expect(screen.getByText("请填写审批理由。")).toBeTruthy();
     expect(onTransition).toHaveBeenCalledTimes(2);
+  });
+
+  it("展示可试听的旁白音轨并将时间批注交给受控 RPC", async () => {
+    const user = userEvent.setup();
+    const onCreateAudioTrackAnnotation = vi.fn().mockResolvedValue(undefined);
+    render(<EpisodeDetail {...materialInputProps} artifacts={[]} audioTracks={[{
+      id: "audio-1", episode_id: reviewEpisode.id, source_task_id: "task-audio", source_artifact_id: "artifact-audio", source_material_revision_id: null, source_review_package_id: "package-1", track_kind: "narration", cue_id: "shot-02", relative_path: "episodes/episode-review/audio/narration.mp3", sha256: "a".repeat(64), file_size: 10, start_seconds: 2, duration_seconds: 8, created_at: "2026-08-15T00:00:00.000Z",
+    }]} audioTrackAnnotations={[]} blueprint={blueprint} episode={reviewEpisode} isDirectoryPending={false} isTransitionPending={false} onCreateAudioTrackAnnotation={onCreateAudioTrackAnnotation} onCreateLocalDirectory={vi.fn()} onTransition={vi.fn()} tasks={[]} transitions={[]} />);
+
+    expect(await screen.findByLabelText("narration 音轨")).toBeTruthy();
+    expect(fetch).toHaveBeenCalledWith(`/_local-artifact?episode=episode-review&path=episodes%2Fepisode-review%2Faudio%2Fnarration.mp3&sha256=${"a".repeat(64)}`, { headers: { Authorization: "Bearer owner-token" } });
+    expect(screen.getByLabelText("音轨时间点").getAttribute("min")).toBe("2");
+    expect(screen.getByLabelText("音轨时间点").getAttribute("max")).toBe("10");
+    await user.clear(screen.getByLabelText("音轨时间点"));
+    await user.type(screen.getByLabelText("音轨时间点"), "2.5");
+    await user.type(screen.getByLabelText("音轨批注"), "这里需要更慢一点");
+    await user.click(screen.getByRole("button", { name: "添加音轨批注" }));
+    expect(onCreateAudioTrackAnnotation).toHaveBeenCalledWith({ audioTrackId: "audio-1", atSeconds: 2.5, reason: "这里需要更慢一点" });
   });
 
   it("展示 A-roll 的冻结执行证据和运行状态", () => {

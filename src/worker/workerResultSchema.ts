@@ -3,7 +3,7 @@ const requiredResultFields = ["version", "taskId", "status", "artifacts", "valid
 const storyboardSchema = {
   type: "object",
   additionalProperties: false,
-  required: ["version", "shots"],
+  required: ["version", "shots", "audioCues"],
   properties: {
     version: { type: "string", const: "storyboard/v1" },
     shots: {
@@ -30,6 +30,21 @@ const storyboardSchema = {
             },
           },
           targetSpec: { type: "string", minLength: 1 },
+        },
+      },
+    },
+    audioCues: {
+      type: "array",
+      items: {
+        type: "object",
+        additionalProperties: false,
+        required: ["id", "kind", "description", "startSeconds", "durationSeconds"],
+        properties: {
+          id: { type: "string", minLength: 1 },
+          kind: { type: "string", enum: ["bgm", "sfx"] },
+          description: { type: "string", minLength: 1 },
+          startSeconds: { type: "number", minimum: 0 },
+          durationSeconds: { type: "number", exclusiveMinimum: 0 },
         },
       },
     },

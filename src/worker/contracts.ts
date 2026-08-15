@@ -23,6 +23,15 @@ export interface StoryboardShotManifest {
 export interface StoryboardManifest {
   version: "storyboard/v1";
   shots: StoryboardShotManifest[];
+  audioCues: StoryboardAudioCue[];
+}
+
+export interface StoryboardAudioCue {
+  id: string;
+  kind: "bgm" | "sfx";
+  description: string;
+  startSeconds: number;
+  durationSeconds: number;
 }
 
 export interface WorkerTaskPackageInput {
@@ -32,7 +41,7 @@ export interface WorkerTaskPackageInput {
     attempt: number;
     budgetLimitCents: number;
     maxAttempts: number;
-    provider: "codex";
+    provider: "codex" | "google_tts" | "pexels" | "ffmpeg" | "freesound";
     model: string;
     promptVersion: string;
   };
@@ -64,6 +73,37 @@ export interface WorkerTaskPackageInput {
     adapter: string;
     shot: StoryboardShotManifest;
   };
+  media?:
+    | {
+      adapter: "google_tts";
+      narration: {
+        text: string;
+        voice: GoogleTtsVoice;
+      };
+    }
+    | {
+      adapter: "pexels_video";
+      bRoll: {
+        query: string;
+        targetDurationSeconds: number;
+        shot: StoryboardShotManifest;
+      };
+    }
+    | {
+      adapter: "ffmpeg_extract_audio";
+      embeddedAudio: {
+        sourceRelativePath: string;
+        durationSeconds: number;
+      };
+    }
+    | {
+      adapter: "freesound_preview";
+      soundtrack: {
+        query: string;
+        targetDurationSeconds: number;
+        cue: StoryboardAudioCue;
+      };
+    };
   allowedTools: string[];
   allowedAssetRoot: string;
   output: {
@@ -77,7 +117,7 @@ export interface WorkerTaskPackageInput {
 
 export interface WorkerTaskPackage {
   version: typeof workerTaskPackageVersion;
-  provider: "codex";
+  provider: WorkerTaskPackageInput["task"]["provider"];
   model: string;
   promptVersion: string;
   capability: string;
@@ -102,6 +142,7 @@ export interface WorkerTaskPackage {
     adapter: string;
     shot: StoryboardShotManifest;
   };
+  media?: WorkerTaskPackageInput["media"];
   allowedTools: readonly string[];
   task: Pick<WorkerTaskPackageInput["task"], "id" | "type">;
   accountId: string;
@@ -124,6 +165,12 @@ export interface WorkerTaskPackage {
   forbiddenActions: readonly ["approve", "publish", "change_blueprint", "change_episode_stage"];
 }
 
+export interface GoogleTtsVoice {
+  languageCode: string;
+  name: string;
+  speakingRate: number;
+}
+
 export interface WorkerResult {
   version: typeof workerResultVersion;
   taskId: string;
@@ -135,6 +182,16 @@ export interface WorkerResult {
     checks: Array<{ name: string; passed: boolean; detail: string }>;
   };
   actualCostCents: number;
+  audioDurationSeconds?: number;
+  mediaSource?: {
+    provider: "freesound";
+    sourceId: number;
+    title: string;
+    creator: string;
+    license: string;
+    sourceUrl: string;
+    previewUrl: string;
+  };
   blockers: Array<{ code: string; detail: string }>;
   retry: {
     shouldRetry: boolean;
@@ -163,6 +220,33 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     if (!isNonEmptyString(input.aRoll.adapter)) throw new Error("a-roll generation requires an adapter.");
     validateStoryboardManifest({ version: "storyboard/v1", shots: [input.aRoll.shot] }, input.inputArtifacts);
   }
+  if (input.capability === "narration_generation" && (!input.media || input.media.adapter !== "google_tts")) throw new Error("旁白生成必须包含冻结的 Google TTS 配置。");
+  if (input.capability === "b_roll_generation" && (!input.media || input.media.adapter !== "pexels_video")) throw new Error("B-roll 生成必须包含冻结的 Pexels 配置。");
+  if (input.capability === "embedded_audio_extraction" && (!input.media || input.media.adapter !== "ffmpeg_extract_audio")) throw new Error("派生音频提取必须包含冻结的视频输入。");
+  if (input.capability === "soundtrack_generation" && (!input.media || input.media.adapter !== "freesound_preview")) throw new Error("声轨生成必须包含冻结的 Freesound 配置。");
+  if (input.media?.adapter === "google_tts") {
+    if (input.task.provider !== "google_tts") throw new Error("旁白任务 Provider 必须与冻结 Google TTS 适配器匹配。");
+    const { narration } = input.media;
+    if (!isNonEmptyString(narration.text) || !isNonEmptyString(narration.voice.languageCode) || !isNonEmptyString(narration.voice.name) || !isPositiveFiniteNumber(narration.voice.speakingRate)) throw new Error("旁白任务的冻结文本或声音无效。");
+  }
+  if (input.media?.adapter === "pexels_video") {
+    if (input.task.provider !== "pexels") throw new Error("B-roll 任务 Provider 必须与冻结 Pexels 适配器匹配。");
+    const { bRoll } = input.media;
+    if (!isNonEmptyString(bRoll.query) || !isPositiveFiniteNumber(bRoll.targetDurationSeconds)) throw new Error("B-roll 任务的冻结检索词或时长无效。");
+    validateStoryboardManifest({ version: "storyboard/v1", shots: [bRoll.shot] }, input.inputArtifacts);
+  }
+  if (input.media?.adapter === "ffmpeg_extract_audio") {
+    if (input.task.provider !== "ffmpeg") throw new Error("派生音频任务 Provider 必须与冻结 ffmpeg 适配器匹配。");
+    const embeddedAudio = input.media.embeddedAudio;
+    if (!isSafeRelativePath(embeddedAudio.sourceRelativePath) || !isPositiveFiniteNumber(embeddedAudio.durationSeconds)) throw new Error("派生音频任务的冻结视频输入或时长无效。");
+    if (!input.inputArtifacts.some((artifact) => artifact.relativePath === embeddedAudio.sourceRelativePath)) throw new Error("派生音频任务的视频输入未冻结。");
+  }
+  if (input.media?.adapter === "freesound_preview") {
+    if (input.task.provider !== "freesound") throw new Error("声轨任务 Provider 必须与冻结 Freesound 适配器匹配。");
+    const soundtrack = input.media.soundtrack;
+    if (!isNonEmptyString(soundtrack.query) || soundtrack.query.length > 100 || !isPositiveFiniteNumber(soundtrack.targetDurationSeconds)) throw new Error("声轨任务的冻结检索词或时长无效。");
+    validateStoryboardAudioCue(soundtrack.cue);
+  }
   if (input.allowedTools.some((tool) => !isNonEmptyString(tool))) throw new Error("allowedTools must contain non-empty names.");
   if (input.output.requiredArtifactTypes.length === 0 || input.output.requiredArtifactTypes.some((artifactType) => !isNonEmptyString(artifactType))) throw new Error("至少需要一个输出产物类型。");
   if (!isNonEmptyString(input.output.contentType) || !isNonEmptyString(input.output.reviewStage) || !isSafeRelativePath(input.output.relativePath)) throw new Error("输出契约缺少有效的内容类型、路径或审核阶段。");
@@ -180,6 +264,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     ...(input.reviewFeedback ? { reviewFeedback: { reviewPackageId: input.reviewFeedback.reviewPackageId, reason: input.reviewFeedback.reason } } : {}),
     ...(input.reviewAnnotations?.length ? { reviewAnnotations: input.reviewAnnotations.map((annotation) => ({ shotId: annotation.shotId, reason: annotation.reason })) } : {}),
     ...(input.aRoll ? { aRoll: { adapter: input.aRoll.adapter, shot: input.aRoll.shot } } : {}),
+    ...(input.media ? { media: input.media } : {}),
     allowedTools: [...new Set(input.allowedTools)],
     task: { id: input.task.id, type: input.task.type },
     accountId: input.episode.accountId,
@@ -200,6 +285,12 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
   if (typeof value.validation.passed !== "boolean" || !Array.isArray(value.validation.checks)) throw new Error("Worker 结果缺少验证信息。");
   const actualCostCents = value.actualCostCents;
   if (!isNonNegativeInteger(actualCostCents)) throw new Error("实际成本必须是非负整数。");
+  const audioDurationSeconds = value.audioDurationSeconds;
+  if (audioDurationSeconds !== undefined && !isPositiveFiniteNumber(audioDurationSeconds)) throw new Error("音频实际时长必须是正数。");
+  const mediaSource = value.mediaSource === undefined ? undefined : parseMediaSource(value.mediaSource);
+  if (taskPackage.provider === "freesound" && value.status === "completed" && mediaSource === undefined) throw new Error("Freesound 任务必须返回媒体来源记录。");
+  if (taskPackage.provider !== "freesound" && mediaSource !== undefined) throw new Error("非 Freesound 任务不能返回媒体来源记录。");
+  if ((taskPackage.capability === "narration_generation" || taskPackage.capability === "embedded_audio_extraction" || taskPackage.capability === "soundtrack_generation") && value.status === "completed" && audioDurationSeconds === undefined) throw new Error("已完成音频任务必须返回实际时长。");
   if (actualCostCents > taskPackage.budget.limitCents) throw new Error("实际成本超过预算。");
 
   if (value.taskId !== taskPackage.task.id) throw new Error("Worker 结果不属于当前任务。");
@@ -241,6 +332,8 @@ export function validateWorkerResult(value: unknown, taskPackage: WorkerTaskPack
       checks: value.validation.checks as WorkerResult["validation"]["checks"],
     },
     actualCostCents,
+    ...(audioDurationSeconds !== undefined ? { audioDurationSeconds } : {}),
+    ...(mediaSource ? { mediaSource: { provider: "freesound", sourceId: mediaSource.sourceId, title: mediaSource.title, creator: mediaSource.creator, license: mediaSource.license, sourceUrl: mediaSource.sourceUrl, previewUrl: mediaSource.previewUrl } } : {}),
     blockers: value.blockers as WorkerResult["blockers"],
     retry: value.retry as WorkerResult["retry"],
     nextStep: value.nextStep,
@@ -273,7 +366,26 @@ export function validateStoryboardManifest(value: unknown, frozenInputs: Artifac
       targetSpec: candidate.targetSpec,
     };
   });
-  return { version: "storyboard/v1", shots };
+  const audioCuesValue = value.audioCues;
+  if (audioCuesValue !== undefined && !Array.isArray(audioCuesValue)) throw new Error("分镜声轨声明格式无效。");
+  const audioCueIds = new Set<string>();
+  const audioCues = (audioCuesValue ?? []).map((candidate) => {
+    validateStoryboardAudioCue(candidate);
+    if (!isRecord(candidate)) throw new Error("分镜声轨声明格式无效。");
+    if (audioCueIds.has(candidate.id)) throw new Error("分镜声轨声明 ID 不能重复。");
+    audioCueIds.add(candidate.id);
+    return { id: candidate.id, kind: candidate.kind as StoryboardAudioCue["kind"], description: candidate.description, startSeconds: candidate.startSeconds, durationSeconds: candidate.durationSeconds };
+  });
+  return { version: "storyboard/v1", shots, audioCues };
+}
+
+function validateStoryboardAudioCue(value: unknown): asserts value is StoryboardAudioCue {
+  if (!isRecord(value) || !isNonEmptyString(value.id) || (value.kind !== "bgm" && value.kind !== "sfx") || !isNonEmptyString(value.description) || !isNonNegativeNumber(value.startSeconds) || !isPositiveFiniteNumber(value.durationSeconds)) throw new Error("分镜声轨声明格式无效。");
+}
+
+function parseMediaSource(value: unknown): NonNullable<WorkerResult["mediaSource"]> {
+  if (!isRecord(value) || value.provider !== "freesound" || !isPositiveInteger(value.sourceId) || !isNonEmptyString(value.title) || !isNonEmptyString(value.creator) || !isNonEmptyString(value.license) || !isHttpUrl(value.sourceUrl) || !isHttpUrl(value.previewUrl)) throw new Error("媒体来源记录无效。");
+  return { provider: "freesound", sourceId: value.sourceId, title: value.title, creator: value.creator, license: value.license, sourceUrl: value.sourceUrl, previewUrl: value.previewUrl };
 }
 
 function assertArtifactManifest(value: unknown): asserts value is ArtifactManifest {
@@ -311,8 +423,26 @@ function isNonNegativeInteger(value: unknown): value is number {
   return Number.isInteger(value) && typeof value === "number" && value >= 0;
 }
 
+function isPositiveInteger(value: unknown): value is number {
+  return Number.isInteger(value) && typeof value === "number" && value > 0;
+}
+
+function isHttpUrl(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
 function isNonNegativeNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
+function isPositiveFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function isWorkerResultStatus(value: unknown): value is WorkerResultStatus {

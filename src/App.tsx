@@ -9,7 +9,7 @@ import { createPublicationConfirmation } from "./publishing/publicationConfirmat
 import { LearningWorkspace } from "./learning/LearningWorkspace";
 import type { ApproveBlueprintChangeSuggestionInput, SaveBlueprintChangeSuggestionInput, SaveExperimentInput, SaveLearningReportInput, SaveMetricSnapshotInput } from "./learning/LearningWorkspace";
 import { clearOperationDraft, readOperationDraft, writeOperationDraft } from "./operationDraft";
-import type { StoryboardShotManifest } from "./worker/contracts";
+import type { StoryboardAudioCue, StoryboardShotManifest } from "./worker/contracts";
 
 type NavigationItem = "accounts" | "episodes" | "reviews" | "publish" | "learning";
 type Theme = "light" | "dark";
@@ -22,6 +22,8 @@ type MaterialRevision = Database["public"]["Tables"]["production_material_revisi
 type ReviewPackage = Database["public"]["Tables"]["review_packages"]["Row"];
 type ReviewAnnotation = Database["public"]["Tables"]["review_annotations"]["Row"];
 type Artifact = Database["public"]["Tables"]["artifacts"]["Row"];
+type AudioTrack = Database["public"]["Tables"]["audio_tracks"]["Row"];
+type AudioTrackAnnotation = Database["public"]["Tables"]["audio_track_annotations"]["Row"];
 type Task = Database["public"]["Tables"]["tasks"]["Row"];
 type Transition = Database["public"]["Tables"]["state_transitions"]["Row"];
 type Experiment = Database["public"]["Tables"]["experiments"]["Row"];
@@ -71,6 +73,12 @@ interface StoryboardAnnotationRequest {
   reason: string;
 }
 
+interface AudioTrackAnnotationRequest {
+  audioTrackId: string;
+  atSeconds: number;
+  reason: string;
+}
+
 interface Workspace {
   accounts: Account[];
   blueprints: Blueprint[];
@@ -81,6 +89,8 @@ interface Workspace {
   reviewPackages: ReviewPackage[];
   reviewAnnotations: ReviewAnnotation[];
   artifacts: Artifact[];
+  audioTracks: AudioTrack[];
+  audioTrackAnnotations: AudioTrackAnnotation[];
   tasks: Task[];
   transitions: Transition[];
   experiments: Experiment[];
@@ -227,10 +237,11 @@ function localArtifactUrl(episodeId: string, relativePath: string, expectedSha25
   return `/_local-artifact?${new URLSearchParams({ episode: episodeId, path: relativePath, ...(expectedSha256 ? { sha256: expectedSha256 } : {}) }).toString()}`;
 }
 
-function artifactPreviewKind(relativePath: string): "image" | "video" | null {
+function artifactPreviewKind(relativePath: string): "image" | "video" | "audio" | null {
   const path = relativePath.toLowerCase();
   if (/\.(avif|gif|jpe?g|png|svg|webp)$/.test(path)) return "image";
   if (/\.(mp4|mov|webm)$/.test(path)) return "video";
+  if (/\.(aac|m4a|mp3|ogg|opus|wav)$/.test(path)) return "audio";
   return null;
 }
 
@@ -243,7 +254,7 @@ function bytesToBase64(content: Uint8Array): string {
 }
 
 async function loadWorkspace(): Promise<Workspace> {
-  const [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, reviewAnnotationsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
+  const [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, reviewAnnotationsResult, artifactsResult, audioTracksResult, audioTrackAnnotationsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult] = await Promise.all([
     supabase.from("accounts").select("*").order("created_at"),
     supabase.from("account_blueprint_versions").select("*").order("version", { ascending: false }),
     supabase.from("episodes").select("*").order("updated_at", { ascending: false }),
@@ -253,6 +264,8 @@ async function loadWorkspace(): Promise<Workspace> {
     supabase.from("review_packages").select("*").order("created_at", { ascending: false }),
     supabase.from("review_annotations").select("*").order("created_at"),
     supabase.from("artifacts").select("*").order("created_at", { ascending: false }),
+    supabase.from("audio_tracks").select("*").order("created_at", { ascending: false }),
+    supabase.from("audio_track_annotations").select("*").order("created_at"),
     supabase.from("tasks").select("*").order("created_at", { ascending: false }),
     supabase.from("state_transitions").select("*").order("created_at", { ascending: false }),
     supabase.from("experiments").select("*").order("created_at", { ascending: false }),
@@ -260,7 +273,7 @@ async function loadWorkspace(): Promise<Workspace> {
     supabase.from("metric_snapshots").select("*").order("captured_at", { ascending: false }),
     supabase.from("blueprint_change_suggestions").select("*").order("created_at", { ascending: false }),
   ]);
-  const error = [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, reviewAnnotationsResult, artifactsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
+  const error = [accountsResult, blueprintsResult, episodesResult, seriesResult, seriesVersionsResult, materialRevisionsResult, reviewPackagesResult, reviewAnnotationsResult, artifactsResult, audioTracksResult, audioTrackAnnotationsResult, tasksResult, transitionsResult, experimentsResult, learningReportsResult, metricSnapshotsResult, blueprintChangeSuggestionsResult]
     .map((result) => result.error)
     .find(Boolean);
 
@@ -276,6 +289,8 @@ async function loadWorkspace(): Promise<Workspace> {
     reviewPackages: reviewPackagesResult.data ?? [],
     reviewAnnotations: reviewAnnotationsResult.data ?? [],
     artifacts: artifactsResult.data ?? [],
+    audioTracks: audioTracksResult.data ?? [],
+    audioTrackAnnotations: audioTrackAnnotationsResult.data ?? [],
     tasks: tasksResult.data ?? [],
     transitions: transitionsResult.data ?? [],
     experiments: experimentsResult.data ?? [],
@@ -620,6 +635,20 @@ export function App() {
     }
   }
 
+  async function createAudioTrackAnnotation(input: AudioTrackAnnotationRequest): Promise<void> {
+    setPendingAction(`audio-annotation-${input.audioTrackId}`);
+    setErrorMessage("");
+    try {
+      const { error } = await supabase.rpc("create_audio_track_annotation", { p_audio_track_id: input.audioTrackId, p_at_seconds: input.atSeconds, p_reason: input.reason });
+      if (error) throw error;
+      await refreshWorkspace();
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "无法保存音轨批注。");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
   async function createLocalEpisodeDirectory(episodeId: string) {
     setPendingAction(`directory-${episodeId}`);
     setErrorMessage("");
@@ -842,6 +871,8 @@ export function App() {
       {isEpisodeDetailOpen && selectedEpisode ? <EpisodeDetailDrawer isOpen={isEpisodeDetailOpen} onClose={() => setIsEpisodeDetailOpen(false)}>
           <EpisodeDetail
             artifacts={workspace.artifacts}
+            audioTracks={workspace.audioTracks}
+            audioTrackAnnotations={workspace.audioTrackAnnotations}
             blueprint={blueprintsById.get(selectedEpisode.blueprint_version_id) ?? null}
             episode={selectedEpisode}
             isDirectoryPending={pendingAction === `directory-${selectedEpisode.id}`}
@@ -860,6 +891,7 @@ export function App() {
             reviewAnnotations={workspace.reviewAnnotations}
             isStoryboardAnnotationPending={pendingAction.startsWith("storyboard-annotation-")}
             onCreateStoryboardAnnotation={createStoryboardAnnotation}
+            onCreateAudioTrackAnnotation={createAudioTrackAnnotation}
             tasks={workspace.tasks}
             transitions={workspace.transitions}
           />
@@ -1062,7 +1094,7 @@ export function PublicationConfirmationForm({ episode, isPending, onConfirm, own
   return <form className="publication-confirmation" onSubmit={submit}><label><input checked={acknowledged} onChange={(event) => updateDraft({ acknowledged: event.target.checked, reason })} type="checkbox" />我已在目标平台手工发布，并核对发布包内容。</label><label>确认理由<input aria-label="发布确认理由" onChange={(event) => updateDraft({ acknowledged, reason: event.target.value })} placeholder="例如：已在 TikTok Studio 发布并复核" required value={reason} /></label>{draft ? <OperationDraftNotice isRestored={isRestoredDraft} onClear={clearDraft} /> : null}<button className="button button-primary" disabled={isPending} type="submit">{isPending ? "确认中…" : "确认已发布"}</button>{formError ? <p className="form-error">{formError}</p> : null}</form>;
 }
 
-export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPending, isMaterialPending, isScriptCommissionPending, isStoryboardAnnotationPending, isTitlePending, isTransitionPending, materialRevisions, onCreateLocalDirectory, onCommissionScript, onCreateStoryboardAnnotation, onImportMaterial, onTransition, onUpdateTitle, ownerId = "local-owner", reviewAnnotations, reviewPackages, tasks, transitions }: { artifacts: Artifact[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isScriptCommissionPending: boolean; isStoryboardAnnotationPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onCommissionScript: (input: ScriptCommissionRequest) => Promise<void>; onCreateStoryboardAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; reviewAnnotations: ReviewAnnotation[]; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
+export function EpisodeDetail({ artifacts, audioTrackAnnotations, audioTracks, blueprint, episode, isDirectoryPending, isMaterialPending, isScriptCommissionPending, isStoryboardAnnotationPending, isTitlePending, isTransitionPending, materialRevisions, onCreateAudioTrackAnnotation, onCreateLocalDirectory, onCommissionScript, onCreateStoryboardAnnotation, onImportMaterial, onTransition, onUpdateTitle, ownerId = "local-owner", reviewAnnotations, reviewPackages, tasks, transitions }: { artifacts: Artifact[]; audioTrackAnnotations: AudioTrackAnnotation[]; audioTracks: AudioTrack[]; blueprint: Blueprint | null; episode: Episode; isDirectoryPending: boolean; isMaterialPending: boolean; isScriptCommissionPending: boolean; isStoryboardAnnotationPending: boolean; isTitlePending: boolean; isTransitionPending: boolean; materialRevisions: MaterialRevision[]; onCreateAudioTrackAnnotation: (input: AudioTrackAnnotationRequest) => Promise<void>; onCreateLocalDirectory: (episodeId: string) => Promise<void>; onCommissionScript: (input: ScriptCommissionRequest) => Promise<void>; onCreateStoryboardAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; onImportMaterial: (input: MaterialImportRequest) => Promise<void>; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; onUpdateTitle: (episodeId: string, title: string) => Promise<void>; ownerId?: string; reviewAnnotations: ReviewAnnotation[]; reviewPackages: ReviewPackage[]; tasks: Task[]; transitions: Transition[] }) {
   const episodeArtifacts = artifacts.filter((artifact) => artifact.episode_id === episode.id);
   const episodeMaterials = materialRevisions.filter((revision) => revision.episode_id === episode.id);
   const history = transitions.filter((transition) => transition.episode_id === episode.id);
@@ -1101,12 +1133,40 @@ export function EpisodeDetail({ artifacts, blueprint, episode, isDirectoryPendin
     {reviewPackage?.stage !== "visual_review" && reviewPackage?.stage !== "storyboard_review" ? <ArtifactPreview artifacts={episodeArtifacts} /> : null}
     {reviewPackage && reviewArtifact ? reviewPackage.stage === "visual_review" ? <VisualReviewPackage artifact={reviewArtifact} artifacts={reviewArtifacts} reviewPackage={reviewPackage} /> : reviewPackage.stage === "storyboard_review" ? <StoryboardReviewPackage annotations={storyboardAnnotations} artifact={reviewArtifact} isAnnotationPending={isStoryboardAnnotationPending} onCreateAnnotation={onCreateStoryboardAnnotation} onValidationChange={onStoryboardValidationChange} reviewPackage={reviewPackage} /> : <TextReviewPackage artifact={reviewArtifact} reviewPackage={reviewPackage} /> : null}
     <ArollTaskEvidencePanel tasks={tasks.filter((task) => task.episode_id === episode.id)} />
+    <AudioTrackPanel annotations={audioTrackAnnotations.filter((annotation) => audioTracks.some((track) => track.episode_id === episode.id && track.id === annotation.audio_track_id))} onCreateAnnotation={onCreateAudioTrackAnnotation} tracks={audioTracks.filter((track) => track.episode_id === episode.id)} />
     <section className="review-section"><h3>产物索引</h3>{episodeArtifacts.length ? episodeArtifacts.map((artifact) => <Artifact key={artifact.id} label={artifact.artifact_type} name={artifact.relative_path} complete />) : <p className="muted-copy">尚无 Worker 生成的产物。</p>}</section>
     {blockers.length ? <section className="review-section worker-blockers"><h3>Worker 阻塞项</h3>{blockers.map((blocker) => <div className="worker-blocker" key={`${blocker.code}-${blocker.detail}`}><strong>{blocker.code}</strong><span>{blocker.detail}</span></div>)}</section> : null}
     {reviewAction && isStoryboardReviewValid ? <ReviewActions episode={episode} isPending={isTransitionPending} onTransition={onTransition} ownerId={ownerId} reviewAction={reviewAction} /> : null}
     {episode.stage === "publishing_review" ? <section className="review-section publication-decision"><h3>发布确认</h3><PublicationConfirmationForm episode={episode} isPending={isTransitionPending} onConfirm={onTransition} ownerId={ownerId} /></section> : null}
     <section className="review-section"><h3>审计时间线</h3>{history.length ? <ol className="timeline">{history.map((transition) => <li key={transition.id}><i className={`timeline-dot ${stageTone(transition.to_stage)}`} /><div><strong>{stageLabels[transition.to_stage]}</strong><span>{transition.reason}</span></div><time>{formatDate(transition.created_at)}</time></li>)}</ol> : <p className="muted-copy">生产单创建与后续状态变化将显示在此处。</p>}</section>
   </>;
+}
+
+function AudioTrackPanel({ annotations, onCreateAnnotation, tracks }: { annotations: AudioTrackAnnotation[]; onCreateAnnotation: (input: AudioTrackAnnotationRequest) => Promise<void>; tracks: AudioTrack[] }) {
+  const [trackId, setTrackId] = useState("");
+  const [atSeconds, setAtSeconds] = useState("0");
+  const [reason, setReason] = useState("");
+  const [formError, setFormError] = useState("");
+  useEffect(() => { if (!trackId && tracks[0]) { setTrackId(tracks[0].id); setAtSeconds(String(tracks[0].start_seconds)); } }, [trackId, tracks]);
+  if (!tracks.length) return <section className="review-section"><h3>音轨</h3><p className="muted-copy">暂无旁白、派生音频或可选声轨。BGM / SFX 当前保持为空。</p></section>;
+  const selectedTrack = tracks.find((candidate) => candidate.id === trackId);
+  const selectedTrackEnd = selectedTrack ? selectedTrack.start_seconds + selectedTrack.duration_seconds : 0;
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    const track = selectedTrack;
+    const seconds = Number(atSeconds);
+    if (!track || !Number.isFinite(seconds) || seconds < track.start_seconds || seconds > track.start_seconds + track.duration_seconds || !reason.trim()) { setFormError("请选择音轨，并输入该音轨时间范围内的时间点和批注。 "); return; }
+    setFormError("");
+    await onCreateAnnotation({ audioTrackId: track.id, atSeconds: seconds, reason: reason.trim() });
+    setReason("");
+  }
+  return <section className="review-section"><h3>音轨</h3>{tracks.map((track) => <AudioTrackCard annotations={annotations.filter((annotation) => annotation.audio_track_id === track.id)} key={track.id} track={track} />)}<form className="review-actions" onSubmit={(event) => void submit(event)}><label>音轨<select aria-label="音轨" onChange={(event) => { const nextTrack = tracks.find((track) => track.id === event.target.value); setTrackId(event.target.value); if (nextTrack) setAtSeconds(String(nextTrack.start_seconds)); }} value={trackId}>{tracks.map((track) => <option key={track.id} value={track.id}>{track.track_kind} · {track.cue_id ?? track.id.slice(0, 8)}</option>)}</select></label><label>时间点（秒）<input aria-label="音轨时间点" max={selectedTrackEnd} min={selectedTrack?.start_seconds ?? 0} onChange={(event) => setAtSeconds(event.target.value)} step="0.001" type="number" value={atSeconds} /></label><label>批注<input aria-label="音轨批注" onChange={(event) => setReason(event.target.value)} value={reason} /></label><button className="button button-secondary" type="submit">添加音轨批注</button></form>{formError ? <p className="form-error">{formError}</p> : null}</section>;
+}
+
+function AudioTrackCard({ annotations, track }: { annotations: AudioTrackAnnotation[]; track: AudioTrack }) {
+  const source = localArtifactUrl(track.episode_id, track.relative_path, track.sha256);
+  const { error, url } = useLocalArtifactBlob(source);
+  return <article className="worker-blocker"><strong>{track.track_kind} · {track.cue_id ?? "未命名"}</strong>{url ? <audio aria-label={`${track.track_kind} 音轨`} controls preload="metadata" src={url} /> : <p className="muted-copy">{error || "正在加载可试听音轨…"}</p>}<dl><div><dt>时间范围</dt><dd>{track.start_seconds}s – {(track.start_seconds + track.duration_seconds).toFixed(3)}s</dd></div><div><dt>来源审核包</dt><dd>{track.source_review_package_id?.slice(0, 8) ?? "派生自固定视频修订"}</dd></div></dl>{annotations.map((annotation) => <p className="muted-copy" key={annotation.id}>{annotation.at_seconds}s · {annotation.reason}</p>)}</article>;
 }
 
 function ArollTaskEvidencePanel({ tasks }: { tasks: Task[] }) {
@@ -1289,8 +1349,9 @@ function VisualReviewPackage({ artifact, artifacts, reviewPackage }: { artifact:
 }
 
 type StoryboardShot = StoryboardShotManifest;
+type StoryboardReviewData = { audioCues: StoryboardAudioCue[]; shots: StoryboardShot[] };
 
-function parseStoryboard(source: string): StoryboardShot[] | null {
+function parseStoryboard(source: string): StoryboardReviewData | null {
   try {
     const parsed: unknown = JSON.parse(source);
     if (!parsed || Array.isArray(parsed) || typeof parsed !== "object" || !("version" in parsed) || parsed.version !== "storyboard/v1" || !("shots" in parsed) || !Array.isArray(parsed.shots) || parsed.shots.length === 0) return null;
@@ -1301,7 +1362,16 @@ function parseStoryboard(source: string): StoryboardShot[] | null {
       if (typeof id !== "string" || !id.trim() || typeof scriptSegment !== "string" || !scriptSegment.trim() || typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || (shotType !== "a_roll" && shotType !== "b_roll") || typeof productionMethod !== "string" || !productionMethod.trim() || !Array.isArray(inputBasis) || inputBasis.length === 0 || inputBasis.some((input) => !input || Array.isArray(input) || typeof input !== "object" || typeof input.relativePath !== "string" || !input.relativePath.trim() || typeof input.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(input.sha256)) || typeof targetSpec !== "string" || !targetSpec.trim()) return null;
       shots.push({ id, scriptSegment, durationSeconds, shotType, productionMethod, inputBasis: inputBasis as StoryboardShot["inputBasis"], targetSpec });
     }
-    return shots;
+    const cuesValue = "audioCues" in parsed ? parsed.audioCues : [];
+    if (!Array.isArray(cuesValue)) return null;
+    const audioCues: StoryboardAudioCue[] = [];
+    for (const candidate of cuesValue) {
+      if (!candidate || Array.isArray(candidate) || typeof candidate !== "object") return null;
+      const { description, durationSeconds, id, kind, startSeconds } = candidate;
+      if (typeof id !== "string" || !id.trim() || (kind !== "bgm" && kind !== "sfx") || typeof description !== "string" || !description.trim() || typeof startSeconds !== "number" || !Number.isFinite(startSeconds) || startSeconds < 0 || typeof durationSeconds !== "number" || !Number.isFinite(durationSeconds) || durationSeconds <= 0) return null;
+      audioCues.push({ id, kind, description, startSeconds, durationSeconds });
+    }
+    return { audioCues, shots };
   } catch {
     return null;
   }
@@ -1310,15 +1380,15 @@ function parseStoryboard(source: string): StoryboardShot[] | null {
 function StoryboardReviewPackage({ annotations, artifact, isAnnotationPending, onCreateAnnotation, onValidationChange, reviewPackage }: { annotations: ReviewAnnotation[]; artifact: Artifact; isAnnotationPending: boolean; onCreateAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; onValidationChange: (valid: boolean) => void; reviewPackage: ReviewPackage }) {
   const source = localArtifactUrl(artifact.episode_id, artifact.relative_path, artifact.sha256);
   const { content, error } = useTextArtifactContent(source);
-  const shots = content ? parseStoryboard(content) : null;
-  useEffect(() => { onValidationChange(!error && Boolean(shots)); }, [error, onValidationChange, shots]);
+  const storyboard = content ? parseStoryboard(content) : null;
+  useEffect(() => { onValidationChange(!error && Boolean(storyboard)); }, [error, onValidationChange, storyboard]);
   if (error) return <section className="review-section"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3><p className="form-error">{error}</p></section>;
   if (!content) return <section className="review-section"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3><p className="muted-copy">正在读取分镜产物…</p></section>;
-  if (!shots) return <section className="review-section"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3><p className="form-error">分镜产物格式无效，无法审核。</p></section>;
-  return <section className="review-section storyboard-review-package"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3>{shots.map((shot) => {
+  if (!storyboard) return <section className="review-section"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3><p className="form-error">分镜产物格式无效，无法审核。</p></section>;
+  return <section className="review-section storyboard-review-package"><h3>可审核分镜 · 修订 v{reviewPackage.revision_number}</h3>{storyboard.shots.map((shot) => {
     const shotAnnotations = annotations.filter((annotation) => annotation.shot_id === shot.id);
     return <article className="storyboard-shot" key={shot.id}><h4>{shot.id} · {shot.shotType === "a_roll" ? "A-roll" : "B-roll"}</h4><dl><div><dt>脚本片段</dt><dd>{shot.scriptSegment}</dd></div><div><dt>时长</dt><dd>{shot.durationSeconds} 秒</dd></div><div><dt>制作方法</dt><dd>{shot.productionMethod}</dd></div><div><dt>冻结输入</dt><dd>{shot.inputBasis.map((input) => `${input.relativePath} · ${input.sha256.slice(0, 12)}…`).join("、")}</dd></div><div><dt>目标规格</dt><dd>{shot.targetSpec}</dd></div></dl>{shotAnnotations.length ? <div className="storyboard-annotations"><strong>已留批注</strong>{shotAnnotations.map((annotation) => <p key={annotation.id}>{annotation.reason}</p>)}</div> : null}<StoryboardAnnotationForm isPending={isAnnotationPending} onCreateAnnotation={onCreateAnnotation} reviewPackageId={reviewPackage.id} shotId={shot.id} /></article>;
-  })}</section>;
+  })}{storyboard.audioCues.length ? <section className="storyboard-audio-cues"><h4>可选声轨</h4>{storyboard.audioCues.map((cue) => <p key={cue.id}><strong>{cue.kind.toUpperCase()} · {cue.id}</strong><span>{cue.startSeconds}s – {(cue.startSeconds + cue.durationSeconds).toFixed(3)}s · {cue.description}</span></p>)}</section> : null}</section>;
 }
 
 function StoryboardAnnotationForm({ isPending, onCreateAnnotation, reviewPackageId, shotId }: { isPending: boolean; onCreateAnnotation: (input: StoryboardAnnotationRequest) => Promise<void>; reviewPackageId: string; shotId: string }) {
@@ -1352,44 +1422,16 @@ function ArtifactPreview({ artifacts }: { artifacts: Artifact[] }) {
   return <div className="artifact-preview">{previewableArtifacts.length > 1 ? <label>预览产物<select aria-label="预览产物" onChange={(event) => setSelectedArtifactId(event.target.value)} value={artifact.id}>{previewableArtifacts.map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.artifact_type} · {candidate.relative_path}</option>)}</select></label> : null}<LocalArtifactMedia artifact={artifact} kind={kind} source={source} /></div>;
 }
 
-function ArtifactPreviewMedia({ kind, label, source }: { kind: "image" | "video"; label: string; source: string }) {
-  return kind === "image" ? <img alt={label} src={source} /> : <video aria-label={label} controls preload="metadata" src={source} />;
+function ArtifactPreviewMedia({ kind, label, source }: { kind: "image" | "video" | "audio"; label: string; source: string }) {
+  if (kind === "image") return <img alt={label} src={source} />;
+  if (kind === "audio") return <audio aria-label={label} controls preload="metadata" src={source} />;
+  return <video aria-label={label} controls preload="metadata" src={source} />;
 }
 
-function LocalArtifactMedia({ artifact, kind, source }: { artifact: Artifact; kind: "image" | "video"; source: string }) {
-  const [previewUrl, setPreviewUrl] = useState("");
-  const [error, setError] = useState("");
+function LocalArtifactMedia({ artifact, kind, source }: { artifact: Artifact; kind: "image" | "video" | "audio"; source: string }) {
+  const { error, url: previewUrl } = useLocalArtifactBlob(source);
   const [isExpanded, setIsExpanded] = useState(false);
   const lightboxRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    let objectUrl = "";
-    let isCurrent = true;
-
-    async function loadPreview() {
-      const { data, error: sessionError } = await supabase.auth.getSession();
-      if (sessionError || !data.session) throw new Error("需要 Owner 登录会话。");
-      const response = await fetch(source, { headers: { Authorization: `Bearer ${data.session.access_token}` } });
-      if (!response.ok) throw new Error("无法读取本地产物预览。");
-      objectUrl = URL.createObjectURL(await response.blob());
-      if (!isCurrent) {
-        URL.revokeObjectURL(objectUrl);
-        objectUrl = "";
-        return;
-      }
-      setPreviewUrl(objectUrl);
-    }
-
-    setPreviewUrl("");
-    setError("");
-    void loadPreview().catch((cause: unknown) => {
-      if (isCurrent) setError(cause instanceof Error ? cause.message : "无法读取本地产物预览。");
-    });
-    return () => {
-      isCurrent = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [source]);
 
   useEffect(() => {
     setIsExpanded(false);
@@ -1433,6 +1475,30 @@ function LocalArtifactMedia({ artifact, kind, source }: { artifact: Artifact; ki
   const previewLabel = `${artifact.artifact_type} 产物预览`;
   const expandedLabel = `${artifact.artifact_type} 产物放大预览`;
   return <><figure className="local-artifact-preview"><ArtifactPreviewMedia kind={kind} label={previewLabel} source={previewUrl} /><button aria-label={`放大查看 ${artifact.artifact_type} 产物`} className="artifact-expand-button" onClick={() => setIsExpanded(true)} type="button">放大查看</button><figcaption>{artifact.artifact_type} · {artifact.relative_path}</figcaption></figure>{isExpanded ? <div aria-label={expandedLabel} aria-modal="true" className="artifact-lightbox" onMouseDown={(event) => { if (event.target === event.currentTarget) setIsExpanded(false); }} ref={lightboxRef} role="dialog"><div className="artifact-lightbox-content"><button aria-label="关闭放大预览" className="artifact-lightbox-close" onClick={() => setIsExpanded(false)} type="button">关闭</button><ArtifactPreviewMedia kind={kind} label={expandedLabel} source={previewUrl} /></div></div> : null}</>;
+}
+
+function useLocalArtifactBlob(source: string | null) {
+  const [url, setUrl] = useState("");
+  const [error, setError] = useState("");
+  useEffect(() => {
+    let objectUrl = "";
+    let isCurrent = true;
+    async function load() {
+      if (!source) throw new Error("本地产物路径无效。");
+      const { data, error: sessionError } = await supabase.auth.getSession();
+      if (sessionError || !data.session) throw new Error("需要 Owner 登录会话。");
+      const response = await fetch(source, { headers: { Authorization: `Bearer ${data.session.access_token}` } });
+      if (!response.ok) throw new Error("无法读取本地产物。");
+      objectUrl = URL.createObjectURL(await response.blob());
+      if (isCurrent) setUrl(objectUrl);
+      else URL.revokeObjectURL(objectUrl);
+    }
+    setUrl("");
+    setError("");
+    void load().catch((cause: unknown) => { if (isCurrent) setError(cause instanceof Error ? cause.message : "无法读取本地产物。"); });
+    return () => { isCurrent = false; if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [source]);
+  return { error, url };
 }
 
 function ReviewActions({ episode, isPending, onTransition, ownerId, reviewAction }: { episode: Episode; isPending: boolean; onTransition: (episodeId: string, toStage: EpisodeStage, reason: string) => Promise<boolean>; ownerId: string; reviewAction: ReviewAction }) {

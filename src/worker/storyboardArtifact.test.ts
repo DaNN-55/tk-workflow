@@ -11,6 +11,7 @@ const frozenInputs: ArtifactManifest[] = [
 ];
 const storyboard: StoryboardManifest = {
   version: "storyboard/v1",
+  audioCues: [],
   shots: [{
     id: "shot-01",
     scriptSegment: "林砚进入古宅。",
