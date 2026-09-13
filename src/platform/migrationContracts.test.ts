@@ -1354,7 +1354,7 @@ describe("B-roll 连接固化迁移", () => {
     const migration = readFileSync(enforcedShotAudioModesMigration, "utf8");
     const durationMigration = readFileSync(durationDecisionMigration, "utf8");
     const reviewVideoMigration = readFileSync(shotReviewVideoMigration, "utf8");
-    const app = readFileSync(resolve("src/App.tsx"), "utf8");
+    const app = readFileSync(resolve("src/episodes/EpisodeProduction.tsx"), "utf8");
 
     expect(migration).toContain("draft.audio_mode = ''source'' then draft.video_duration_seconds");
     expect(migration).toContain("elsif draft.audio_mode = ''source'' then");
@@ -1502,7 +1502,7 @@ describe("B-roll 连接固化迁移", () => {
 
   it("历史 Episode 固化旧声音兼容值，新 Episode 不再从蓝图读取声音默认", () => {
     const migration = readFileSync(episodeTtsOwnershipMigration, "utf8");
-    const app = readFileSync(resolve("src/App.tsx"), "utf8");
+    const app = readFileSync(resolve("src/episodes/EpisodeProduction.tsx"), "utf8");
 
     expect(migration).toContain("update public.episodes episode");
     expect(migration).toContain("Episode TTS settings must preserve shot confirmation");
