@@ -22,7 +22,7 @@ vi.mock("./worker/runtimeEvidence", () => ({
 }));
 vi.mock("./worker/runtimeProbes", () => ({ probeCodexModel: vi.fn(), probeProviderConnection: vi.fn() }));
 
-import { assertWorkerDispatchEnvironment, beginEpisodeDispatch, beginTaskDispatch, runtimePreflightForPolicy, serveEpisodeDispatch, serveEpisodePreflight, taskDispatchInvocation, taskDispatchStatus } from "../vite.config";
+import { assertWorkerDispatchEnvironment, beginEpisodeDispatch, beginTaskDispatch, createLocalControlPlaneMiddleware, runtimePreflightForPolicy, taskDispatchInvocation, taskDispatchStatus, type LocalControlPlaneDependencies } from "./local-control-plane/testing";
 
 const accountId = "11111111-1111-4111-8111-111111111111";
 const episodeId = "22222222-2222-4222-8222-222222222222";
@@ -54,6 +54,14 @@ function mockSupabaseClient() {
   };
   mocks.createClient.mockReturnValue(client);
   return client;
+}
+
+function createControlPlaneServer(dependencies: LocalControlPlaneDependencies = {}) {
+  const middleware = createLocalControlPlaneMiddleware({ supabaseUrl: "https://supabase.test", supabasePublishableKey: "publishable" }, dependencies);
+  return createServer((request, response) => middleware(request, response, (error) => {
+    response.statusCode = 500;
+    response.end(error?.message ?? "Unhandled local control plane request");
+  }));
 }
 
 describe("Episode 修复 preflight 路由", () => {
@@ -101,7 +109,7 @@ describe("Episode 修复 preflight 路由", () => {
     mockSupabaseClient();
     const report = { version: "worker-preflight/v2", checks: [] };
     mocks.inspectPreflight.mockResolvedValue({ passed: true, issues: [], report });
-    const server = createServer(serveEpisodePreflight("https://supabase.test", "publishable"));
+    const server = createControlPlaneServer();
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("测试服务器未监听端口。");
@@ -141,7 +149,7 @@ describe("开始制作后的即时派发", () => {
     const dispatch = vi.fn(() => "started" as const);
     const client = mockSupabaseClient();
     client.from.mockImplementation((table: string) => queryResult(table === "tasks" ? { id: taskId } : table === "episodes" ? { account_id: accountId } : table === "account_memberships" ? { role: "owner" } : null));
-    const server = createServer(serveEpisodeDispatch("https://supabase.test", "publishable", dispatch));
+    const server = createControlPlaneServer({ dispatchTask: dispatch });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("测试服务器未监听端口。");
@@ -165,7 +173,7 @@ describe("开始制作后的即时派发", () => {
     const client = mockSupabaseClient();
     client.from.mockImplementation((table: string) => queryResult(table === "tasks" ? { id: taskId } : table === "episodes" ? { account_id: accountId } : table === "account_memberships" ? { role: "owner" } : null));
     const dispatch = vi.fn(() => { throw new Error("Worker 即时派发配置不完整：SUPABASE_URL"); });
-    const server = createServer(serveEpisodeDispatch("https://supabase.test", "publishable", dispatch));
+    const server = createControlPlaneServer({ dispatchTask: dispatch });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("测试服务器未监听端口。");
@@ -210,7 +218,7 @@ describe("开始制作后的即时派发", () => {
     const client = mockSupabaseClient();
     client.from.mockImplementation((table: string) => queryResult(table === "tasks" ? { id: taskId } : table === "episodes" ? { account_id: accountId } : table === "account_memberships" ? { role: "owner" } : null));
     const readStatus = vi.fn(() => ({ detail: "Worker 启动失败。", status: "failed" as const, updatedAt: "2026-09-12T00:00:00.000Z" }));
-    const server = createServer(serveEpisodeDispatch("https://supabase.test", "publishable", vi.fn(() => "started" as const), readStatus));
+    const server = createControlPlaneServer({ dispatchTask: vi.fn(() => "started" as const), readTaskDispatchStatus: readStatus });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("测试服务器未监听端口。");

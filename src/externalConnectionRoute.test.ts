@@ -1,6 +1,7 @@
 // @vitest-environment node
 
-import { Readable } from "node:stream";
+import { createServer } from "node:http";
+import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -11,7 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock("@supabase/supabase-js", () => ({ createClient: mocks.createClient }));
 vi.mock("./worker/runtimeProbes", () => ({ probeProviderConnection: mocks.probeProviderConnection }));
 
-import { serveExternalConnectionTest } from "../vite.config";
+import { createLocalControlPlaneMiddleware } from "./local-control-plane/testing";
 
 describe("外部连接测试路由", () => {
   afterEach(() => vi.clearAllMocks());
@@ -25,14 +26,31 @@ describe("外部连接测试路由", () => {
     mocks.createClient.mockImplementation((_url: string, key: string) => key === "service-key" ? serviceClient : ownerClient);
     mocks.probeProviderConnection.mockResolvedValue({ connection: { available: true, detail: "网络已连通" }, credentialValidity: { available: false, status: "unavailable", detail: `凭据 ${secret} 被拒绝。` } });
 
-    const request = Readable.from([JSON.stringify({ connectionId: connection.id })]) as never;
-    Object.assign(request, { headers: { authorization: "Bearer owner-token" }, method: "POST", url: "/_external-connection-test" });
-    const response = { body: "", headers: new Map<string, string>(), statusCode: 0, end(value?: string) { this.body = value ?? ""; }, setHeader(name: string, value: string) { this.headers.set(name, value); } };
-    await serveExternalConnectionTest("https://supabase.test", "publishable", "service-key")(request, response as never);
-    expect(response.statusCode).toBe(200);
-    expect(response.body).not.toContain(secret);
-    expect(response.body).toContain("invalid");
-    expect(serviceClient.rpc).toHaveBeenCalledWith("resolve_external_connection_secret", { p_connection_id: connection.current_version_id });
-    expect(serviceClient.rpc).toHaveBeenCalledWith("record_external_connection_verification", expect.objectContaining({ p_status: "invalid" }));
+    const middleware = createLocalControlPlaneMiddleware(
+      { supabaseUrl: "https://supabase.test", supabasePublishableKey: "publishable" },
+      { serviceRoleKey: "service-key" },
+    );
+    const server = createServer((request, response) => middleware(request, response, (error) => {
+      response.statusCode = 500;
+      response.end(error?.message ?? "Unhandled local control plane request");
+    }));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    try {
+      const response = await fetch(`${origin}/_external-connection-test`, {
+        body: JSON.stringify({ connectionId: connection.id }),
+        headers: { Authorization: "Bearer owner-token", "Content-Type": "application/json" },
+        method: "POST",
+      });
+      const body = await response.text();
+      expect(response.status).toBe(200);
+      expect(body).not.toContain(secret);
+      expect(body).toContain("invalid");
+      expect(serviceClient.rpc).toHaveBeenCalledWith("resolve_external_connection_secret", { p_connection_id: connection.current_version_id });
+      expect(serviceClient.rpc).toHaveBeenCalledWith("record_external_connection_verification", expect.objectContaining({ p_status: "invalid" }));
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
   });
 });
