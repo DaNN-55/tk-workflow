@@ -22,7 +22,8 @@ import { createHash } from "node:crypto";
 import { executeOpenChatCutRender } from "./openchatcutRenderer.js";
 import { durationToleranceSeconds, videoDurationMeetsMinimum } from "./durationDecision.js";
 import { readTaskIdArgument } from "./taskClaimArguments.js";
-import { createRuntimePreflight, credentialEnvironmentForReference, localAdapterReadinessFromCommands, runtimeCapabilityFromTask, runtimeCommandArguments, runtimeCommandInvocation } from "./runtimePreflight.js";
+import { createRuntimePreflight, type RuntimeEvidenceAdapter, type RuntimeEvidenceDemand, type RuntimeEvidenceFact } from "./runtimePreflight.js";
+import { credentialEnvironmentForReference, runtimeCommandArguments, runtimeCommandInvocation } from "./runtimeEvidence.js";
 import { probeCodexModel, probeProviderConnection } from "./runtimeProbes.js";
 import { runLocalWhisperXAlignment } from "./whisperxAlignment.js";
 
@@ -188,35 +189,72 @@ function visualAssetRequests(value: unknown): VisualAssetRequest[] {
 }
 
 async function preflightTask(taskPackage: WorkerTaskPackage): Promise<WorkerPreflightResult> {
-  const capability = runtimeCapabilityFromTask(taskPackage);
-  const imageGeneration = taskPackage.visualAssetPreparation?.imageGeneration;
-  const connectionRef = imageGeneration?.credentialRef ?? taskPackage.credentialRef;
-  const connectionProvider = imageGeneration?.provider ?? taskPackage.provider;
-  const connectionAdapter = imageGeneration?.adapter ?? taskPackage.aRoll?.adapter ?? taskPackage.media?.adapter;
-  const connectionModel = imageGeneration?.model ?? taskPackage.model;
-  const capabilities = [capability, ...(imageGeneration ? [{ capability: "static_visual_generation", provider: connectionProvider, adapter: connectionAdapter, model: connectionModel, promptVersion: taskPackage.promptVersion, allowedTools: taskPackage.allowedTools, credentialRef: imageGeneration.credentialRef }] : [])];
-  const credential = credentialEnvironmentForReference(connectionProvider, connectionAdapter, connectionRef);
-  const command = capability.command;
-  const commandStatus = command ? await workerCommandStatus(command) : undefined;
-  const commands = command && commandStatus ? { [command]: commandStatus } : undefined;
-  const localAdapters = commands ? localAdapterReadinessFromCommands(capabilities, commands) : undefined;
-  const modelProbe = taskPackage.provider === "codex" && commandStatus?.available
-    ? await probeCodexModel(taskPackage.model, (probeCommand, argumentsList, options) => runCommandWithOutput(probeCommand, argumentsList, options?.timeoutMs), tmpdir())
-    : undefined;
-  const apiKey = await resolveConnectionSecret(connectionRef, connectionProvider, connectionAdapter, taskPackage.accountId);
-  const providerProbe = apiKey && connectionProvider !== "codex" ? await probeProviderConnection(connectionProvider, apiKey, fetch, connectionModel) : undefined;
-  const connections = { ...(modelProbe ? { [taskPackage.provider]: modelProbe.connection } : {}), ...(providerProbe ? { [connectionProvider]: providerProbe.connection } : {}) };
-  const modelPermissions = { ...(modelProbe ? { [taskPackage.model]: modelProbe.modelPermission } : {}), ...(providerProbe?.modelPermission ? { [connectionModel]: providerProbe.modelPermission } : {}) };
-  const credentialValidity = providerProbe?.credentialValidity && (credential || connectionRef) ? { [credential ?? connectionRef!]: providerProbe.credentialValidity } : undefined;
-  return createRuntimePreflight(capabilities, {
-    credentials: credential ? { [credential]: Boolean(apiKey) } : connectionRef ? { [connectionRef]: Boolean(apiKey) } : undefined,
-    ...(connectionRef ? { connectionReferences: { [connectionRef]: apiKey ? { available: true, detail: "外部连接引用已解析。" } : { available: false, detail: "外部连接秘密不可用。" } } } : {}),
-    commands,
-    ...(localAdapters ? { localAdapters } : {}),
-    ...(Object.keys(connections).length ? { connections } : {}),
-    ...(Object.keys(modelPermissions).length ? { modelPermissions } : {}),
-    ...(credentialValidity ? { credentialValidity } : {}),
-  });
+  const evidence = workerRuntimeEvidenceAdapter(taskPackage);
+  return (await createRuntimePreflight(evidence).inspect({ kind: "worker_task", taskPackage })).report;
+}
+
+function workerRuntimeEvidenceAdapter(taskPackage: WorkerTaskPackage): RuntimeEvidenceAdapter {
+  return {
+    async collect({ demands }) {
+      const commands = new Map<string, Promise<{ available: boolean; detail: string }>>();
+      const secrets = new Map<string, Promise<string | undefined>>();
+      const providers = new Map<string, Promise<Awaited<ReturnType<typeof probeProviderConnection>> | undefined>>();
+      const codexModels = new Map<string, Promise<Awaited<ReturnType<typeof probeCodexModel>> | undefined>>();
+      const commandStatus = (command: string) => {
+        let pending = commands.get(command);
+        if (!pending) {
+          pending = workerCommandStatus(command);
+          commands.set(command, pending);
+        }
+        return pending;
+      };
+      const secretFor = (demand: RuntimeEvidenceDemand) => {
+        const key = demand.credentialRef ?? demand.credential ?? demand.provider ?? demand.key;
+        let pending = secrets.get(key);
+        if (!pending) {
+          pending = demand.credential
+            ? Promise.resolve(process.env[demand.credential]?.trim())
+            : resolveConnectionSecret(demand.credentialRef, demand.provider ?? "", demand.adapter, taskPackage.accountId);
+          secrets.set(key, pending);
+        }
+        return pending;
+      };
+      const providerProbe = (demand: RuntimeEvidenceDemand) => {
+        const key = `${demand.provider}:${demand.credentialRef ?? demand.credential ?? ""}:${demand.model ?? ""}`;
+        let pending = providers.get(key);
+        if (!pending) pending = secretFor(demand).then((secret) => secret && demand.provider && demand.provider !== "codex" ? probeProviderConnection(demand.provider, secret, fetch, demand.model) : undefined);
+        providers.set(key, pending);
+        return pending;
+      };
+      const codexProbe = (demand: RuntimeEvidenceDemand) => {
+        const model = demand.model ?? demand.key;
+        let pending = codexModels.get(model);
+        if (!pending) pending = commandStatus("codex").then((status) => status.available ? probeCodexModel(model, (probeCommand, argumentsList, options) => runCommandWithOutput(probeCommand, argumentsList, options?.timeoutMs), tmpdir()) : undefined);
+        codexModels.set(model, pending);
+        return pending;
+      };
+      return Promise.all(demands.map(async (demand): Promise<RuntimeEvidenceFact> => {
+        if (demand.kind === "asset_root" || demand.kind === "media_library") return { ...demand, state: "not_applicable" };
+        if (demand.kind === "command_availability") return { ...demand, state: "observed", value: await commandStatus(demand.command ?? demand.key) };
+        if (demand.kind === "local_adapter_readiness") return { ...demand, state: "observed", value: demand.command ? await commandStatus(demand.command) : { available: false, detail: `本地 ${demand.key} 尚未完成当前 Worker 就绪探测。` } };
+        if (demand.kind === "connection_reference") {
+          const secret = await secretFor(demand);
+          return { ...demand, state: "observed", value: secret ? { available: true, detail: "外部连接引用已解析。" } : { available: false, detail: "外部连接秘密不可用。" } };
+        }
+        if (demand.kind === "credential_presence") return { ...demand, state: "observed", value: Boolean(await secretFor(demand)) };
+        if (demand.kind === "model_permission") {
+          const probe = demand.provider === "codex" ? await codexProbe(demand) : await providerProbe(demand);
+          return probe?.modelPermission ? { ...demand, state: "observed", value: probe.modelPermission } : { ...demand, state: "not_applicable" };
+        }
+        if (demand.kind === "network_connectivity") {
+          const probe = demand.provider === "codex" ? await codexProbe(demand) : await providerProbe(demand);
+          return probe?.connection ? { ...demand, state: "observed", value: probe.connection } : { ...demand, state: "not_applicable" };
+        }
+        const probe = await providerProbe(demand);
+        return probe?.credentialValidity ? { ...demand, state: "observed", value: probe.credentialValidity } : { ...demand, state: "not_applicable" };
+      }));
+    },
+  };
 }
 
 async function resolveTaskSecret(taskPackage: WorkerTaskPackage): Promise<string | undefined> {

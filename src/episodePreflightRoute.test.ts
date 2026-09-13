@@ -1,13 +1,12 @@
 // @vitest-environment node
 
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
   createRuntimePreflight: vi.fn(),
-  localAdapterReadinessFromCommands: vi.fn(() => ({})),
-  runtimeCapabilitiesFromBlueprintPolicy: vi.fn(),
+  inspectPreflight: vi.fn(),
   runtimeCommandInvocation: vi.fn(() => ({ command: process.execPath, argumentsList: ["--version"] })),
   verifyMediaLibrary: vi.fn(),
 }));
@@ -16,8 +15,8 @@ vi.mock("@supabase/supabase-js", () => ({ createClient: mocks.createClient }));
 vi.mock("./worker/mediaLibrary", () => ({ verifyMediaLibrary: mocks.verifyMediaLibrary }));
 vi.mock("./worker/runtimePreflight", () => ({
   createRuntimePreflight: mocks.createRuntimePreflight,
-  localAdapterReadinessFromCommands: mocks.localAdapterReadinessFromCommands,
-  runtimeCapabilitiesFromBlueprintPolicy: mocks.runtimeCapabilitiesFromBlueprintPolicy,
+}));
+vi.mock("./worker/runtimeEvidence", () => ({
   runtimeCommandArguments: vi.fn(() => ["--version"]),
   runtimeCommandInvocation: mocks.runtimeCommandInvocation,
 }));
@@ -58,22 +57,19 @@ function mockSupabaseClient() {
 }
 
 describe("Episode 修复 preflight 路由", () => {
+  beforeEach(() => {
+    mocks.inspectPreflight.mockResolvedValue({ passed: true, issues: [], report: { checks: [], version: "worker-preflight/v2" } });
+    mocks.createRuntimePreflight.mockReturnValue({ inspect: mocks.inspectPreflight });
+  });
   afterEach(() => vi.clearAllMocks());
 
-  it("蓝图预检复用 Worker 命令入口而不是直接 spawn OpenChatCut", async () => {
-    mocks.runtimeCapabilitiesFromBlueprintPolicy.mockReturnValue([
-      { capability: "review_rendering", command: "openchatcut", provider: "openchatcut" },
-      { capability: "final_rendering", command: "openchatcut", provider: "openchatcut" },
-    ]);
-    mocks.createRuntimePreflight.mockReturnValue({ checks: [], version: "worker-preflight/v2" });
+  it("蓝图预检只向运行前置条件模块提交业务 subject", async () => {
+    const report = { checks: [], version: "worker-preflight/v2" };
+    mocks.inspectPreflight.mockResolvedValue({ passed: true, issues: [], report });
 
-    await runtimePreflightForPolicy({}, null);
+    await expect(runtimePreflightForPolicy({}, null)).resolves.toEqual(report);
 
-    expect(mocks.runtimeCommandInvocation).toHaveBeenCalledOnce();
-    expect(mocks.runtimeCommandInvocation).toHaveBeenCalledWith("openchatcut", ["--version"], expect.any(Object));
-    expect(mocks.createRuntimePreflight).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
-      commands: { openchatcut: expect.objectContaining({ available: true }) },
-    }));
+    expect(mocks.inspectPreflight).toHaveBeenCalledWith(expect.objectContaining({ kind: "account_blueprint", policy: {}, target: "new_episode" }));
   });
 
   it("创建生产单前不要求预先存在 episodes 目录", async () => {
@@ -81,9 +77,13 @@ describe("Episode 修复 preflight 路由", () => {
     const originalMinimumFreeBytes = process.env.MEDIA_LIBRARY_MIN_FREE_BYTES;
     process.env.MEDIA_LIBRARY_MOUNT_PATH = "/Volumes/media";
     process.env.MEDIA_LIBRARY_MIN_FREE_BYTES = "0";
-    mocks.runtimeCapabilitiesFromBlueprintPolicy.mockReturnValue([]);
     mocks.verifyMediaLibrary.mockResolvedValue({ availableBytes: 1, mountPath: "/Volumes/media" });
-    mocks.createRuntimePreflight.mockReturnValue({ checks: [], version: "worker-preflight/v1" });
+    mocks.createRuntimePreflight.mockImplementation((adapter) => ({
+      inspect: async (subject: unknown) => {
+        await adapter.collect({ subject, demands: [{ kind: "media_library", key: "worker_runtime" }] });
+        return { passed: true, issues: [], report: { checks: [], version: "worker-preflight/v2" } };
+      },
+    }));
 
     try {
       await runtimePreflightForPolicy({ asset_root: "/Volumes/media/account" }, null);
@@ -99,9 +99,8 @@ describe("Episode 修复 preflight 路由", () => {
 
   it("使用提交中的修复策略、Episode 的系列快照，并执行资产目录检查", async () => {
     mockSupabaseClient();
-    const report = { version: "worker-preflight/v1", checks: [] };
-    mocks.runtimeCapabilitiesFromBlueprintPolicy.mockReturnValue([]);
-    mocks.createRuntimePreflight.mockReturnValue(report);
+    const report = { version: "worker-preflight/v2", checks: [] };
+    mocks.inspectPreflight.mockResolvedValue({ passed: true, issues: [], report });
     const server = createServer(serveEpisodePreflight("https://supabase.test", "publishable"));
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
@@ -115,8 +114,7 @@ describe("Episode 修复 preflight 路由", () => {
       });
 
       expect(response.status).toBe(200);
-      expect(mocks.runtimeCapabilitiesFromBlueprintPolicy).toHaveBeenCalledWith(proposedPolicy, { b_roll: { provider: "series-provider" } }, []);
-      expect(mocks.createRuntimePreflight).toHaveBeenCalledWith([], expect.objectContaining({ assetRoot: expect.objectContaining({ available: false }) }));
+      expect(mocks.inspectPreflight).toHaveBeenCalledWith(expect.objectContaining({ policy: proposedPolicy, seriesRules: { b_roll: { provider: "series-provider" } }, requiredMediaCapabilities: [], target: "existing_episode" }));
       expect(await response.json()).toEqual({ preflight: report });
     } finally {
       await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

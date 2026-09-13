@@ -11,7 +11,8 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { promisify } from "node:util";
 import { loadEnv, type Plugin } from "vite";
 import { verifyMediaLibrary } from "./src/worker/mediaLibrary";
-import { createRuntimePreflight, localAdapterReadinessFromCommands, runtimeCapabilitiesFromBlueprintPolicy, runtimeCommandArguments, runtimeCommandInvocation } from "./src/worker/runtimePreflight";
+import { createRuntimePreflight, type RuntimeEvidenceAdapter, type RuntimeEvidenceDemand, type RuntimeEvidenceFact } from "./src/worker/runtimePreflight";
+import { runtimeCommandArguments, runtimeCommandInvocation } from "./src/worker/runtimeEvidence";
 import { probeCodexModel, probeProviderConnection } from "./src/worker/runtimeProbes";
 import { isSupportedManualARollVideo, isSupportedManualAudio } from "./src/reviews/materialImport";
 import { workerPreflightVersion } from "./src/worker/contracts";
@@ -1413,7 +1414,7 @@ export function serveSystemStatus(supabaseUrl: string | undefined, supabasePubli
         hasOwnerMembership: Boolean(ownerMembershipResult.data?.length),
         ownerMembershipsReadable: !ownerMembershipResult.error,
       });
-      const codexModels = activeBlueprintsError ? [] : [...new Set((activeBlueprints ?? []).flatMap(({ policy }) => runtimeCapabilitiesFromBlueprintPolicy(policy, undefined).filter((capability) => capability.provider === "codex" && capability.model).map((capability) => capability.model as string)))];
+      const codexModels = activeBlueprintsError ? [] : [...new Set((activeBlueprints ?? []).flatMap(({ policy }) => codexModelsFromPolicy(policy)))];
       const codexCliAvailable = localDependencies[0]?.state === "healthy";
       const codexModelDependencies = activeBlueprintsError
         ? [{ detail: `无法读取当前激活蓝图的 Codex 模型：${safeStatusDetail(activeBlueprintsError)}`, name: "Codex 模型", state: "unknown" as const }]
@@ -1869,48 +1870,114 @@ function redactConnectionSecret(detail: string, secret: string): string {
 }
 
 export async function runtimePreflightForPolicy(policy: unknown, seriesRules: unknown, requiredMediaCapabilities?: readonly string[], hasExistingEpisode = false, accountId?: string) {
-  const capabilities = runtimeCapabilitiesFromBlueprintPolicy(policy, seriesRules, requiredMediaCapabilities);
-  const commandNames = [...new Set(capabilities.map((capability) => capability.command).filter((command): command is string => Boolean(command)))];
-  const credentialNames = [...new Set(capabilities.map((capability) => capability.credential).filter((credential): credential is string => Boolean(credential)))];
-  const credentials = Object.fromEntries(credentialNames.map((credential) => [credential, Boolean(localWorkerEnvironmentValue(credential))]));
-  const referenceCapabilities = capabilities.filter((capability) => capability.credentialRef);
-  const referenceEntriesPromise = Promise.all(referenceCapabilities.map(async (capability) => [capability.credentialRef!, await localWorkerSecretForCapability(capability, accountId)] as const));
-  const commandEntriesPromise = Promise.all(commandNames.map(async (command) => {
-    const invocation = runtimeCommandInvocation(command, runtimeCommandArguments(command), { openChatCutNode: localWorkerEnvironmentValue("OPENCHATCUT_NODE") });
-    return [command, await dependencyStatus(command, invocation.command, invocation.argumentsList)] as const;
-  }));
-  const providerEntriesPromise = Promise.all([...new Set(capabilities.filter((capability) => capability.credential || capability.credentialRef).map((capability) => capability.provider))].map(async (provider) => {
-    const capability = capabilities.find((candidate) => candidate.provider === provider);
-    const credential = capability?.credential;
-    const apiKey = capability?.credentialRef && isUuid(capability.credentialRef)
-      ? await localWorkerSecretForCapability(capability, accountId)
-      : capability?.credential ? localWorkerEnvironmentValue(capability.credential) : undefined;
-    if (!apiKey) return null;
-    return { provider, credential: credential ?? capability?.credentialRef, probe: await probeProviderConnection(provider, apiKey) };
-  }));
-  const assetRootPromise = workerMediaLibraryStatus(policy, hasExistingEpisode);
-  const commandEntries = await commandEntriesPromise;
-  const commands = Object.fromEntries(commandEntries.map(([command, status]) => [command, { available: status.state === "healthy", detail: status.detail }]));
-  const localAdapters = localAdapterReadinessFromCommands(capabilities, commands);
-  const modelEntries = await Promise.all([...new Set(capabilities.filter((capability) => capability.provider === "codex" && capability.model && commands.codex?.available).map((capability) => capability.model as string))].map(async (model) => {
-    const probe = await probeCodexModel(model, (command, argumentsList, options) => runProbeCommand(command, argumentsList, options?.timeoutMs), tmpdir());
-    return [model, probe] as const;
-  }));
-  const [providerEntries, referenceEntries, assetRoot] = await Promise.all([providerEntriesPromise, referenceEntriesPromise, assetRootPromise]);
-  const modelPermissions = Object.fromEntries(modelEntries.map(([model, probe]) => [model, probe.modelPermission]));
-  const connections = Object.fromEntries(providerEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry)).map((entry) => [entry.provider, entry.probe.connection]));
-  const credentialValidity = Object.fromEntries(providerEntries.filter((entry): entry is NonNullable<typeof entry> => Boolean(entry?.probe.credentialValidity)).map((entry) => [entry.credential, entry.probe.credentialValidity]));
-  const connectionReferences = Object.fromEntries(referenceEntries.map(([reference, secret]) => [reference, secret ? { available: true, detail: "外部连接引用已解析。" } : { available: false, detail: "外部连接引用不存在或尚未验证。" }]));
-  return createRuntimePreflight(capabilities, {
-    commands,
-    ...(Object.keys(localAdapters).length ? { localAdapters } : {}),
-    credentials: { ...credentials, ...Object.fromEntries(referenceEntries.map(([reference, secret]) => [reference, Boolean(secret)])) },
-    ...(Object.keys(connectionReferences).length ? { connectionReferences } : {}),
-    ...(Object.keys(modelPermissions).length ? { modelPermissions } : {}),
-    ...(Object.keys(connections).length ? { connections } : {}),
-    ...(Object.keys(credentialValidity).length ? { credentialValidity } : {}),
-    ...(hasExistingEpisode ? { assetRoot } : { mediaLibrary: assetRoot }),
+  const subject = { kind: "account_blueprint" as const, policy, seriesRules, requiredMediaCapabilities, target: hasExistingEpisode ? "existing_episode" as const : "new_episode" as const, ...(accountId ? { accountId } : {}) };
+  const decision = await createRuntimePreflight(localRuntimeEvidenceAdapter(policy, hasExistingEpisode, accountId)).inspect(subject);
+  return decision.report;
+}
+
+function localRuntimeEvidenceAdapter(policy: unknown, hasExistingEpisode: boolean, accountId?: string): RuntimeEvidenceAdapter {
+  return {
+    async collect({ demands }) {
+      const commands = new Map<string, Promise<{ available: boolean; detail: string }>>();
+      const secrets = new Map<string, Promise<string | undefined>>();
+      const providers = new Map<string, Promise<Awaited<ReturnType<typeof probeProviderConnection>> | undefined>>();
+      const codexModels = new Map<string, Promise<Awaited<ReturnType<typeof probeCodexModel>> | undefined>>();
+      const commandStatus = (command: string) => {
+        let pending = commands.get(command);
+        if (!pending) {
+          const invocation = runtimeCommandInvocation(command, runtimeCommandArguments(command), { openChatCutNode: localWorkerEnvironmentValue("OPENCHATCUT_NODE") });
+          pending = dependencyStatus(command, invocation.command, invocation.argumentsList).then((status) => ({ available: status.state === "healthy", detail: status.detail }));
+          commands.set(command, pending);
+        }
+        return pending;
+      };
+      const secretFor = (demand: RuntimeEvidenceDemand) => {
+        const key = demand.credentialRef ?? demand.credential ?? demand.provider ?? demand.key;
+        let pending = secrets.get(key);
+        if (!pending) {
+          pending = Promise.resolve(demand.credentialRef && isUuid(demand.credentialRef)
+            ? localWorkerSecretForCapability({ ...demand, provider: demand.provider ?? "" }, accountId)
+            : demand.credential ? localWorkerEnvironmentValue(demand.credential) : undefined);
+          secrets.set(key, pending);
+        }
+        return pending;
+      };
+      const providerProbe = (demand: RuntimeEvidenceDemand) => {
+        const key = `${demand.provider}:${demand.credentialRef ?? demand.credential ?? ""}:${demand.model ?? ""}`;
+        let pending = providers.get(key);
+        if (!pending) pending = secretFor(demand).then((secret) => secret && demand.provider && demand.provider !== "codex" ? probeProviderConnection(demand.provider, secret) : undefined);
+        providers.set(key, pending);
+        return pending;
+      };
+      const codexProbe = (demand: RuntimeEvidenceDemand) => {
+        const model = demand.model ?? demand.key;
+        let pending = codexModels.get(model);
+        if (!pending) pending = commandStatus("codex").then((status) => status.available ? probeCodexModel(model, (command, argumentsList, options) => runProbeCommand(command, argumentsList, options?.timeoutMs), tmpdir()) : undefined);
+        codexModels.set(model, pending);
+        return pending;
+      };
+      return Promise.all(demands.map(async (demand): Promise<RuntimeEvidenceFact> => {
+        if (demand.kind === "media_library" || demand.kind === "asset_root") {
+          const value = await workerMediaLibraryStatus(policy, hasExistingEpisode);
+          return value ? { ...demand, state: "observed", value } : { ...demand, state: "not_applicable" };
+        }
+        if (demand.kind === "command_availability") return { ...demand, state: "observed", value: await commandStatus(demand.command ?? demand.key) };
+        if (demand.kind === "local_adapter_readiness") return { ...demand, state: "observed", value: demand.command ? await commandStatus(demand.command) : { available: false, detail: `本地 ${demand.key} 尚未完成当前 Worker 就绪探测。` } };
+        if (demand.kind === "connection_reference") {
+          const secret = await secretFor(demand);
+          return { ...demand, state: "observed", value: { available: Boolean(secret), detail: secret ? "外部连接引用已解析。" : "外部连接引用不存在或尚未验证。" } };
+        }
+        if (demand.kind === "credential_presence") return { ...demand, state: "observed", value: Boolean(await secretFor(demand)) };
+        if (demand.kind === "model_permission") {
+          const probe = demand.provider === "codex" ? await codexProbe(demand) : await providerProbe(demand);
+          return probe?.modelPermission ? { ...demand, state: "observed", value: probe.modelPermission } : { ...demand, state: "not_applicable" };
+        }
+        if (demand.kind === "network_connectivity") {
+          const probe = demand.provider === "codex" ? await codexProbe(demand) : await providerProbe(demand);
+          return probe?.connection ? { ...demand, state: "observed", value: probe.connection } : { ...demand, state: "not_applicable" };
+        }
+        const probe = await providerProbe(demand);
+        return probe?.credentialValidity ? { ...demand, state: "observed", value: probe.credentialValidity } : { ...demand, state: "not_applicable" };
+      }));
+    },
+  };
+}
+
+function codexModelsFromPolicy(policy: unknown): string[] {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return [];
+  const root = policy as Record<string, unknown>;
+  const candidates: unknown[] = [];
+  const executors = root.executors && typeof root.executors === "object" && !Array.isArray(root.executors) ? root.executors as Record<string, unknown> : {};
+  candidates.push(executors.storyboard_planning);
+  for (const key of ["static_visual", "a_roll", "b_roll", "narration", "soundtrack"]) {
+    const config = root[key];
+    if (config && typeof config === "object" && !Array.isArray(config)) {
+      const record = config as Record<string, unknown>;
+      if (record.execution_path !== "manual" && Object.keys(record).length > 0) candidates.push(record.executor);
+    }
+  }
+  return candidates.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return [];
+    const executor = candidate as Record<string, unknown>;
+    return executor.provider === "codex" && typeof executor.model === "string" && executor.model.trim() ? [executor.model.trim()] : [];
   });
+}
+
+function mediaExecutorFromPolicy(policy: unknown, key: "narration"): { adapter: string; credentialRef?: string; model?: string; provider: string } | undefined {
+  if (!policy || typeof policy !== "object" || Array.isArray(policy)) return undefined;
+  const config = (policy as Record<string, unknown>)[key];
+  if (!config || typeof config !== "object" || Array.isArray(config)) return undefined;
+  const record = config as Record<string, unknown>;
+  if (record.execution_path === "manual") return undefined;
+  const executor = record.executor;
+  if (!executor || typeof executor !== "object" || Array.isArray(executor)) return undefined;
+  const selection = executor as Record<string, unknown>;
+  const provider = typeof selection.provider === "string" ? selection.provider.trim() : "";
+  const adapter = typeof selection.adapter === "string" ? selection.adapter.trim() : "";
+  if (!provider || !adapter) return undefined;
+  const model = typeof selection.model === "string" && selection.model.trim() ? selection.model.trim() : undefined;
+  const credentialRef = typeof record.credential_ref === "string" && record.credential_ref.trim() ? record.credential_ref.trim() : undefined;
+  return { adapter, provider, ...(model ? { model } : {}), ...(credentialRef ? { credentialRef } : {}) };
 }
 
 async function localWorkerSecretForCapability(capability: { credential?: string; credentialRef?: string; provider: string }, accountId?: string): Promise<string | undefined> {
@@ -2044,13 +2111,13 @@ export function serveTtsVoicePreview(supabaseUrl: string | undefined, supabasePu
       if (episodeError || !episode || !await accountIsOwned({ accountId: episode.account_id, authorization, supabasePublishableKey, supabaseUrl })) { response.statusCode = 403; response.end("没有该生产单的 Owner 权限。"); return; }
       const { data: blueprint, error: blueprintError } = await client.from("account_blueprint_versions").select("policy").eq("id", episode.blueprint_version_id).eq("account_id", episode.account_id).maybeSingle();
       if (blueprintError || !blueprint) throw new Error("未找到当前蓝图。");
-      const capability = runtimeCapabilitiesFromBlueprintPolicy(blueprint.policy, undefined, ["narration_generation"]).find((candidate) => candidate.capability === "narration_generation");
+      const capability = mediaExecutorFromPolicy(blueprint.policy, "narration");
       if (!capability || (capability.provider !== "google_tts" && capability.provider !== "volcengine_tts")) throw new Error("当前蓝图没有可试听的 TTS 执行器。");
       const policy = blueprint.policy && typeof blueprint.policy === "object" && !Array.isArray(blueprint.policy) ? blueprint.policy as Record<string, unknown> : {};
       const narration = policy.narration && typeof policy.narration === "object" && !Array.isArray(policy.narration) ? policy.narration as Record<string, unknown> : {};
       const assetRoot = typeof policy.asset_root === "string" ? policy.asset_root.trim() : "";
       if (!assetRoot) throw new Error("当前蓝图没有本地资产根目录。");
-      const resolution = registeredAdapters.resolve({ capability: capability.capability, provider: capability.provider, adapter: capability.adapter });
+      const resolution = registeredAdapters.resolve({ capability: "narration_generation", provider: capability.provider, adapter: capability.adapter });
       const catalog = resolution.kind === "registered" ? resolution.choice.voiceCatalog?.[languageCode] : undefined;
       if (!catalog || !catalog.includes(voice)) throw new Error("所选语言或音色不在当前 TTS 执行器目录中。");
       const apiKey = await localWorkerSecretForCapability(capability, episode.account_id);

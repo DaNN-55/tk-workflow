@@ -1,5 +1,5 @@
 import { tmpdir } from "node:os";
-import type { RuntimeDependencyStatus } from "./runtimePreflight.js";
+import type { RuntimeDependencyStatus } from "./runtimeEvidence.js";
 
 export interface RuntimeProbeCommandResult {
   stdout: string;
