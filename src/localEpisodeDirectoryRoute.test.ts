@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { cachedStoryboardVideoThumbnail, cachedTtsVoicePreview, confirmedStudioShotBlockers, coverImageExtension, createLocalEpisodeDirectory, finalizeStagedLocalEpisodeDirectory, parseShotWorkbenchClipSegments, restoreStagedLocalEpisodeDirectory, saveProductionMaterialSnapshot, serveChooseLocalAssetDirectory, serveEpisodeDeletion, serveEpisodeDeletionCleanup, serveEpisodePreflight, serveFreezeOpenChatCutStudio, serveLocalArtifact, serveLocalEpisodeDirectory, serveOpenLocalArtifact, serveOpenLocalAssetDirectory, serveOpenLocalEpisodeDirectory, serveOpenOpenChatCutStudio, servePublishPreparation, serveTtsVoicePreview, shotWorkbenchReviewRender, stageLocalEpisodeDirectoryForDeletion, studioEntryModeForPaths, type ShotWorkbenchStudioInput } from "../vite.config";
+import { cachedStoryboardVideoThumbnail, cachedTtsVoicePreview, confirmedStudioShotBlockers, coverImageExtension, createLocalControlPlaneMiddleware, createLocalEpisodeDirectory, finalizeStagedLocalEpisodeDirectory, parseShotWorkbenchClipSegments, restoreStagedLocalEpisodeDirectory, saveProductionMaterialSnapshot, shotWorkbenchReviewRender, stageLocalEpisodeDirectoryForDeletion, studioEntryModeForPaths, type ShotWorkbenchStudioInput } from "./local-control-plane/testing";
 import { defaultShotComposition } from "./shotComposition";
 import { defaultShotCaptionContract } from "./shotCaptions";
 import { normalizeShotAudioMix } from "./shotAudioMix";
@@ -19,6 +19,14 @@ const execFileAsync = promisify(execFile);
 const ffmpegAvailable = await execFileAsync("ffmpeg", ["-version"]).then(() => true).catch(() => false);
 let server: ReturnType<typeof createServer>;
 let origin = "";
+
+function createControlPlaneServer(supabaseUrl?: string, supabasePublishableKey?: string) {
+  const middleware = createLocalControlPlaneMiddleware({ supabasePublishableKey, supabaseUrl });
+  return createServer((request, response) => middleware(request, response, (error) => {
+    response.statusCode = 500;
+    response.end(error?.message ?? "Unhandled local control plane request");
+  }));
+}
 
 function studioDraft(input: { audioMode: "none" | "source" | "tts"; clipSegments: Array<{ startSeconds: number; endSeconds: number }>; materialRevisionId: string | null; shotId: string; subtitleText: string; subtitlesEnabled: boolean; ttsText: string | null; audioTrackId?: string | null }): ShotWorkbenchStudioInput["drafts"][number] {
   const composition = defaultShotComposition("full", input.clipSegments.length);
@@ -31,10 +39,7 @@ function studioDraft(input: { audioMode: "none" | "source" | "tts"; clipSegments
 }
 
 beforeAll(async () => {
-  const middleware = serveLocalEpisodeDirectory(undefined, undefined);
-  server = createServer((request, response) => {
-    void middleware(request, response);
-  });
+  server = createControlPlaneServer();
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   origin = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -92,10 +97,7 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("创建前 Worker 检查拒绝未登录、错误方法和未配置 Supabase", async () => {
-    const middleware = serveEpisodePreflight(undefined, undefined);
-    const preflightServer = createServer((request, response) => {
-      void middleware(request, response);
-    });
+    const preflightServer = createControlPlaneServer();
     await new Promise<void>((resolve) => preflightServer.listen(0, "127.0.0.1", resolve));
     const preflightOrigin = `http://127.0.0.1:${(preflightServer.address() as AddressInfo).port}`;
     try {
@@ -114,8 +116,7 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("音色试听在调用供应商前拒绝未登录、错误方法和未配置服务", async () => {
-    const middleware = serveTtsVoicePreview(undefined, undefined);
-    const previewServer = createServer((request, response) => { void middleware(request, response); });
+    const previewServer = createControlPlaneServer();
     await new Promise<void>((resolve) => previewServer.listen(0, "127.0.0.1", resolve));
     const previewOrigin = `http://127.0.0.1:${(previewServer.address() as AddressInfo).port}`;
     try {
@@ -215,8 +216,7 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("发布准备路由在写入文件前拒绝未登录、错误方法和未配置服务", async () => {
-    const middleware = servePublishPreparation(undefined, undefined, "");
-    const publishServer = createServer((request, response) => { void middleware(request, response); });
+    const publishServer = createControlPlaneServer();
     await new Promise<void>((resolve) => publishServer.listen(0, "127.0.0.1", resolve));
     const publishOrigin = `http://127.0.0.1:${(publishServer.address() as AddressInfo).port}`;
     try {
@@ -234,10 +234,7 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("打开目录路由拒绝未登录、非法 ID 和错误方法", async () => {
-    const middleware = serveOpenLocalEpisodeDirectory(undefined, undefined);
-    const openServer = createServer((request, response) => {
-      void middleware(request, response);
-    });
+    const openServer = createControlPlaneServer();
     await new Promise<void>((resolve) => openServer.listen(0, "127.0.0.1", resolve));
     const openOrigin = `http://127.0.0.1:${(openServer.address() as AddressInfo).port}`;
     try {
@@ -256,16 +253,16 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("OpenChatCut 路由在访问本机工程前拒绝未登录、非法 ID 和错误方法", async () => {
-    const cases = [serveOpenOpenChatCutStudio(undefined, undefined), serveFreezeOpenChatCutStudio(undefined, undefined)];
-    for (const middleware of cases) {
-      const studioServer = createServer((request, response) => { void middleware(request, response); });
+    const routes = ["_open-openchatcut-studio", "_freeze-openchatcut-studio"];
+    for (const route of routes) {
+      const studioServer = createControlPlaneServer();
       await new Promise<void>((resolve) => studioServer.listen(0, "127.0.0.1", resolve));
       const studioOrigin = `http://127.0.0.1:${(studioServer.address() as AddressInfo).port}`;
       try {
         const [unauthorized, invalidId, wrongMethod] = await Promise.all([
-          fetch(`${studioOrigin}/studio?episode=${episodeId}`, { body: "{}", method: "POST" }),
-          fetch(`${studioOrigin}/studio?episode=not-an-episode-id`, { body: "{}", headers: { Authorization: "Bearer invalid", "Content-Type": "application/json" }, method: "POST" }),
-          fetch(`${studioOrigin}/studio?episode=${episodeId}`, { headers: { Authorization: "Bearer invalid" } }),
+          fetch(`${studioOrigin}/${route}?episode=${episodeId}`, { body: "{}", method: "POST" }),
+          fetch(`${studioOrigin}/${route}?episode=not-an-episode-id`, { body: "{}", headers: { Authorization: "Bearer invalid", "Content-Type": "application/json" }, method: "POST" }),
+          fetch(`${studioOrigin}/${route}?episode=${episodeId}`, { headers: { Authorization: "Bearer invalid" } }),
         ]);
         expect(unauthorized.status).toBe(401);
         expect(invalidId.status).toBe(400);
@@ -278,11 +275,11 @@ describe("本地 Episode 目录路由", () => {
 
   it("账号资产目录路由在触碰本机文件系统前拒绝未登录、非法参数和错误方法", async () => {
     const cases = [
-      [serveChooseLocalAssetDirectory(undefined, undefined), "_choose-local-asset-directory", `account=${episodeId}`],
-      [serveOpenLocalAssetDirectory(undefined, undefined), "_open-local-asset-directory", `account=${episodeId}&path=%2Ftmp`],
+      ["_choose-local-asset-directory", `account=${episodeId}`],
+      ["_open-local-asset-directory", `account=${episodeId}&path=%2Ftmp`],
     ] as const;
-    for (const [middleware, route, query] of cases) {
-      const assetServer = createServer((request, response) => { void middleware(request, response); });
+    for (const [route, query] of cases) {
+      const assetServer = createControlPlaneServer();
       await new Promise<void>((resolve) => assetServer.listen(0, "127.0.0.1", resolve));
       const assetOrigin = `http://127.0.0.1:${(assetServer.address() as AddressInfo).port}`;
       try {
@@ -301,10 +298,7 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("打开产物路由拒绝未登录、非法参数和错误方法", async () => {
-    const middleware = serveOpenLocalArtifact(undefined, undefined);
-    const openServer = createServer((request, response) => {
-      void middleware(request, response);
-    });
+    const openServer = createControlPlaneServer();
     await new Promise<void>((resolve) => openServer.listen(0, "127.0.0.1", resolve));
     const openOrigin = `http://127.0.0.1:${(openServer.address() as AddressInfo).port}`;
     try {
@@ -346,8 +340,7 @@ describe("本地 Episode 目录路由", () => {
     });
     await new Promise<void>((resolve) => supabaseServer.listen(0, "127.0.0.1", resolve));
     const supabaseOrigin = `http://127.0.0.1:${(supabaseServer.address() as AddressInfo).port}`;
-    const middleware = serveLocalArtifact(supabaseOrigin, "publishable-key");
-    const previewServer = createServer((request, response) => { void middleware(request, response, () => undefined); });
+    const previewServer = createControlPlaneServer(supabaseOrigin, "publishable-key");
     await new Promise<void>((resolve) => previewServer.listen(0, "127.0.0.1", resolve));
     const previewOrigin = `http://127.0.0.1:${(previewServer.address() as AddressInfo).port}`;
 
@@ -392,8 +385,7 @@ describe("本地 Episode 目录路由", () => {
     });
     await new Promise<void>((resolve) => supabaseServer.listen(0, "127.0.0.1", resolve));
     const supabaseOrigin = `http://127.0.0.1:${(supabaseServer.address() as AddressInfo).port}`;
-    const middleware = serveLocalArtifact(supabaseOrigin, "publishable-key");
-    const previewServer = createServer((request, response) => { void middleware(request, response, () => undefined); });
+    const previewServer = createControlPlaneServer(supabaseOrigin, "publishable-key");
     await new Promise<void>((resolve) => previewServer.listen(0, "127.0.0.1", resolve));
     const previewOrigin = `http://127.0.0.1:${(previewServer.address() as AddressInfo).port}`;
 
@@ -433,8 +425,7 @@ describe("本地 Episode 目录路由", () => {
     });
     await new Promise<void>((resolve) => supabaseServer.listen(0, "127.0.0.1", resolve));
     const supabaseOrigin = `http://127.0.0.1:${(supabaseServer.address() as AddressInfo).port}`;
-    const middleware = serveLocalArtifact(supabaseOrigin, "publishable-key");
-    const previewServer = createServer((request, response) => { void middleware(request, response, () => undefined); });
+    const previewServer = createControlPlaneServer(supabaseOrigin, "publishable-key");
     await new Promise<void>((resolve) => previewServer.listen(0, "127.0.0.1", resolve));
     const previewUrl = `http://127.0.0.1:${(previewServer.address() as AddressInfo).port}/_local-artifact?episode=${episodeId}&path=${encodeURIComponent(relativePath)}&sha256=${sha256}`;
 
@@ -451,10 +442,7 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("永久删除路由在执行文件系统操作前拒绝未登录、非法 ID 和错误方法", async () => {
-    const middleware = serveEpisodeDeletion(undefined, undefined);
-    const deletionServer = createServer((request, response) => {
-      void middleware(request, response);
-    });
+    const deletionServer = createControlPlaneServer();
     await new Promise<void>((resolve) => deletionServer.listen(0, "127.0.0.1", resolve));
     const deletionOrigin = `http://127.0.0.1:${(deletionServer.address() as AddressInfo).port}`;
     try {
@@ -473,10 +461,7 @@ describe("本地 Episode 目录路由", () => {
   });
 
   it("删除暂存清理路由在执行文件系统操作前拒绝未登录和非法参数", async () => {
-    const middleware = serveEpisodeDeletionCleanup(undefined, undefined);
-    const cleanupServer = createServer((request, response) => {
-      void middleware(request, response);
-    });
+    const cleanupServer = createControlPlaneServer();
     await new Promise<void>((resolve) => cleanupServer.listen(0, "127.0.0.1", resolve));
     const cleanupOrigin = `http://127.0.0.1:${(cleanupServer.address() as AddressInfo).port}`;
     try {
