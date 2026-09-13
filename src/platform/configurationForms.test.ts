@@ -24,7 +24,7 @@ describe("账号蓝图表单转换", () => {
     expect(mediaAdapterConfiguration("soundtrack")).toMatchObject({ configurationFields: ["max_attempts"] });
   });
 
-  it("不在运行时替旧 Pexels 配置静默选择连接", () => {
+  it("不替旧 Pexels 配置猜测执行路径或连接", () => {
     const form = blueprintPolicyToForm({
       b_roll: {
         executor: { provider: "pexels", adapter: "pexels_video", model: "pexels-video-v1", prompt_version: "b-roll-v1" },
@@ -38,7 +38,8 @@ describe("账号蓝图表单转换", () => {
     });
 
     expect(form.mediaAdapters.b_roll).toMatchObject({ adapter: "pexels_video", credentialRef: "" });
-    expect(() => validateMediaAdapter("b_roll", form.mediaAdapters.b_roll)).toThrow("外部连接");
+    expect(() => validateMediaAdapter("b_roll", form.mediaAdapters.b_roll)).toThrow("执行路径");
+    expect(() => validateMediaAdapter("b_roll", { ...form.mediaAdapters.b_roll, executionPath: "external" })).toThrow("外部连接");
   });
 
   it("默认关闭五项生产能力，并保存启用但未完成的草稿", () => {
@@ -222,19 +223,19 @@ describe("账号蓝图表单转换", () => {
   });
 
   it("校验旁白和配乐必须选择已登记的外部连接", () => {
-    const narration = blueprintPolicyToForm({ narration: { credential_ref: "google-tts-default", executor: { provider: "google_tts", adapter: "google_tts", model: "standard", prompt_version: "narration-v1" }, allowed_tools: ["read", "write"], budget_cents: 10, max_attempts: 1, voice: { language_code: "zh-CN", name: "voice-a", speaking_rate: 1 } } }).mediaAdapters.narration;
-    const form = blueprintPolicyToForm({ soundtrack: { credential_ref: "freesound-default", executor: { provider: "freesound", adapter: "freesound_preview", model: "freesound-preview-v1", prompt_version: "soundtrack-v1" }, allowed_tools: ["read", "write"], budget_cents: 10, max_attempts: 1 } }).mediaAdapters.soundtrack;
+    const narration = blueprintPolicyToForm({ narration: { execution_path: "external", credential_ref: "google-tts-default", executor: { provider: "google_tts", adapter: "google_tts", model: "standard", prompt_version: "narration-v1" }, allowed_tools: ["read", "write"], budget_cents: 10, max_attempts: 1, voice: { language_code: "zh-CN", name: "voice-a", speaking_rate: 1 } } }).mediaAdapters.narration;
+    const form = blueprintPolicyToForm({ soundtrack: { execution_path: "external", credential_ref: "freesound-default", executor: { provider: "freesound", adapter: "freesound_preview", model: "freesound-preview-v1", prompt_version: "soundtrack-v1" }, allowed_tools: ["read", "write"], budget_cents: 10, max_attempts: 1 } }).mediaAdapters.soundtrack;
 
     expect(() => validateMediaAdapter("narration", narration)).toThrow("外部连接");
     expect(() => validateMediaAdapter("narration", { ...narration, credentialRef: "" })).toThrow("外部连接");
     expect(() => validateMediaAdapter("soundtrack", { ...form, credentialRef: "11111111-1111-4111-8111-111111111111" })).not.toThrow();
     expect(() => validateMediaAdapter("soundtrack", form)).toThrow("外部连接");
-    expect(() => validateMediaAdapter("soundtrack", { ...form, adapter: "other" })).toThrow("已注册");
+    expect(() => validateMediaAdapter("soundtrack", { ...form, adapter: "other" })).toThrow("未注册 Adapter");
     expect(() => validateMediaAdapter("soundtrack", { ...form, credentialRef: "" })).toThrow("外部连接");
   });
 
   it("校验静态视觉必须使用 OpenAI 已验证连接版本引用", () => {
-    const form = blueprintPolicyToForm({ static_visual: { credential_ref: "openai-default", executor: { provider: "openai", adapter: "openai_images", model: "gpt-image-1", prompt_version: "static-visual-v1" }, allowed_tools: ["read", "write"], budget_cents: 10, max_attempts: 1 } }).mediaAdapters.static_visual;
+    const form = blueprintPolicyToForm({ static_visual: { execution_path: "external", credential_ref: "openai-default", executor: { provider: "openai", adapter: "openai_images", model: "gpt-image-1", prompt_version: "static-visual-v1" }, allowed_tools: ["read", "write"], budget_cents: 10, max_attempts: 1 } }).mediaAdapters.static_visual;
     expect(() => validateMediaAdapter("static_visual", form)).toThrow("外部连接");
     expect(() => validateMediaAdapter("static_visual", { ...form, credentialRef: "44444444-4444-4444-8444-444444444444" })).not.toThrow();
   });

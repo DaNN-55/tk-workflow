@@ -21,7 +21,7 @@ import { canonicalMaterialName, materialPurposeLabel, materialPurposeOptions, ma
 import { materialImportDraftStorageAvailable, readMaterialImportDrafts, writeMaterialImportDrafts } from "../reviews/materialImportDraftStore";
 import type { ExternalConnectionVersion } from "../connections/ConnectionWorkspace";
 import { Range } from "react-range";
-import { adapterRegistration } from "../worker/adapterRegistry";
+import { registeredAdapters } from "../worker/registeredAdapters";
 import { createShotDurationDecision, durationToleranceSeconds, type ShotDurationDecision } from "../worker/durationDecision";
 import { defaultShotComposition, normalizeShotComposition, shotCompositionLayoutLabels, shotCompositionLayouts, shotCompositionRect, shotCompositionSlotLabels, shotCompositionTiming, shotTransitionModeLabels, shotTransitionModes, type ShotComposition, type ShotTransitionMode } from "../shotComposition";
 import { normalizeShotCaptionContract, shotCaptionAnchorLabels, shotCaptionAnchors, shotCaptionSafeAreaGeometry, shotCaptionSafeAreaInsets, shotCaptionSafeAreaLabels, shotCaptionSafeAreas, type ShotCaptionContract, type ShotCaptionContentMode, type ShotCaptionSafeAreaInsets, type ShotCaptionSpatialConstraints } from "../shotCaptions";
@@ -1156,8 +1156,9 @@ function episodeTtsSettings(episode: Episode): EpisodeTtsSettings {
 function availableTtsVoices(blueprint: Json | undefined, languageCode: string, selectedVoice = ""): string[] {
   const narration = blueprint && !Array.isArray(blueprint) && typeof blueprint === "object" && blueprint.narration && !Array.isArray(blueprint.narration) && typeof blueprint.narration === "object" ? blueprint.narration : null;
   const executor = narration?.executor && !Array.isArray(narration.executor) && typeof narration.executor === "object" ? narration.executor : null;
-  const registration = adapterRegistration(typeof executor?.provider === "string" ? executor.provider : "", typeof executor?.adapter === "string" ? executor.adapter : "");
-  return [...new Set([selectedVoice, ...(registration?.voiceCatalog?.[languageCode] ?? [])])].filter(Boolean);
+  const resolution = registeredAdapters.resolve({ capability: "narration_generation", provider: typeof executor?.provider === "string" ? executor.provider : "", adapter: typeof executor?.adapter === "string" ? executor.adapter : "" });
+  const voiceCatalog = resolution.kind === "registered" ? resolution.choice.voiceCatalog : undefined;
+  return [...new Set([selectedVoice, ...(voiceCatalog?.[languageCode] ?? [])])].filter(Boolean);
 }
 
 function EpisodeTtsSettingsPanel({ blueprint, episode, isPending, onSave }: { blueprint?: Json; episode: Episode; isPending: boolean; onSave: (input: { episodeId: string; languageCode: string; speakingRate: number; voice: string }) => Promise<void> }) {
@@ -1174,8 +1175,9 @@ function EpisodeTtsSettingsPanel({ blueprint, episode, isPending, onSave }: { bl
   useEffect(() => () => { previewAudioRef.current?.pause(); if (previewAudioUrlRef.current) URL.revokeObjectURL(previewAudioUrlRef.current); }, []);
   const narration = blueprint && !Array.isArray(blueprint) && typeof blueprint === "object" && blueprint.narration && !Array.isArray(blueprint.narration) && typeof blueprint.narration === "object" ? blueprint.narration : null;
   const executor = narration?.executor && !Array.isArray(narration.executor) && typeof narration.executor === "object" ? narration.executor : null;
-  const registration = adapterRegistration(typeof executor?.provider === "string" ? executor.provider : "", typeof executor?.adapter === "string" ? executor.adapter : "");
-  const languages = [...new Set([languageCode, ...Object.keys(registration?.voiceCatalog ?? {})])].filter(Boolean);
+  const resolution = registeredAdapters.resolve({ capability: "narration_generation", provider: typeof executor?.provider === "string" ? executor.provider : "", adapter: typeof executor?.adapter === "string" ? executor.adapter : "" });
+  const voiceCatalog = resolution.kind === "registered" ? resolution.choice.voiceCatalog : undefined;
+  const languages = [...new Set([languageCode, ...Object.keys(voiceCatalog ?? {})])].filter(Boolean);
   const voices = availableTtsVoices(blueprint, languageCode, voice);
   const currentSignature = `${languageCode}\u0000${voice}\u0000${speakingRate}`;
   const isDirty = currentSignature !== savedSignature;

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mediaCapabilityForKey, mediaCapabilityKeys } from "./adapterRegistry";
+import { mediaCapabilityForKey, mediaCapabilityKeys } from "./productionCapabilities";
 import { createRuntimePreflight, localAdapterReadinessFromCommands, resolveRuntimeCapability, runtimeCapabilitiesFromBlueprintPolicy, runtimeCapabilityFromTask, runtimeCommandInvocation } from "./runtimePreflight";
 import type { WorkerTaskPackage } from "./contracts";
 
@@ -38,7 +38,7 @@ describe("runtime preflight", () => {
 
   it("未部署的本地 Adapter 指向环境管理员", () => {
     const capability = runtimeCapabilitiesFromBlueprintPolicy({
-      a_roll: { execution_path: "local", executor: { provider: "openchatcut", adapter: "openchatcut_card_video", model: "openchatcut@0.2.14", prompt_version: "a-roll-v1" } },
+      a_roll: { execution_path: "local", executor: { provider: "openchatcut", adapter: "openchatcut_card_video", model: "openchatcut@0.2.14", prompt_version: "card-video-v1" } },
     }, undefined, ["a_roll_generation"]).find((candidate) => candidate.capability === "a_roll_generation")!;
 
     expect(createRuntimePreflight([capability]).checks).toContainEqual(expect.objectContaining({ capability: "a_roll_generation", check: "local_adapter_readiness", status: "unavailable", action: "contact_environment_admin", scope: "worker" }));
@@ -174,12 +174,13 @@ describe("runtime preflight", () => {
     expect(createRuntimePreflight([capability!]).checks).toContainEqual(expect.objectContaining({ capability: "static_visual_generation", check: "blueprint_configuration", status: "blocked", action: "edit_blueprint", scope: "blueprint" }));
   });
 
-  it("将 OpenAI 不支持的模型指向编辑蓝图，将认证拒绝指向管理连接", () => {
+  it("将目录外模型指向编辑蓝图，将认证拒绝指向管理连接", () => {
     const capability = { capability: "static_visual_generation", provider: "openai", adapter: "openai_images", credentialRef: "22222222-2222-4222-8222-222222222222", model: "unsupported-model", promptVersion: "static-visual-v1", allowedTools: ["read", "write"] };
-    const modelResult = createRuntimePreflight([capability], { modelPermissions: { "unsupported-model": { available: false, detail: "OpenAI 不支持该模型。" } } });
-    const credentialResult = createRuntimePreflight([capability], { credentialValidity: { [capability.credentialRef]: { available: false, detail: "OpenAI 拒绝凭据。" } } });
+    const modelResult = createRuntimePreflight([capability]);
+    const validCapability = { ...capability, model: "gpt-image-1" };
+    const credentialResult = createRuntimePreflight([validCapability], { credentialValidity: { [capability.credentialRef]: { available: false, detail: "OpenAI 拒绝凭据。" } } });
 
-    expect(modelResult.checks).toContainEqual(expect.objectContaining({ check: "model_permission", status: "unavailable", action: "edit_blueprint", scope: "blueprint" }));
+    expect(modelResult.checks).toContainEqual(expect.objectContaining({ check: "blueprint_configuration", status: "blocked", action: "edit_blueprint", scope: "blueprint" }));
     expect(credentialResult.checks).toContainEqual(expect.objectContaining({ check: "credential_validity", status: "unavailable", action: "manage_connection", scope: "connection" }));
   });
 
@@ -245,10 +246,11 @@ describe("runtime preflight", () => {
     expect(result.checks).toContainEqual(expect.objectContaining({ capability: "worker_runtime", check: "asset_root", status: "unavailable", action: "contact_environment_admin" }));
   });
 
-  it("保留真实模型权限和网络探测的独立结果", () => {
+  it("保留已注册 Codex 能力的模型权限和网络探测结果", () => {
     const result = createRuntimePreflight([{
       capability: "script_writing",
       provider: "codex",
+      adapter: "codex",
       model: "gpt-5.6-codex",
       promptVersion: "script-v1",
       allowedTools: ["read", "write"],
@@ -309,7 +311,7 @@ describe("runtime preflight", () => {
       a_roll: { execution_path: "external", executor: { provider: "codex", adapter: "codex", model: "video-generation-v1", prompt_version: "a-roll-v1" } },
     }, undefined, ["a_roll_generation"]);
 
-    expect(createRuntimePreflight(capabilities).checks).toContainEqual(expect.objectContaining({ capability: "a_roll_generation", check: "capability_registration", status: "unavailable" }));
+    expect(createRuntimePreflight(capabilities).checks).toContainEqual(expect.objectContaining({ capability: "a_roll_generation", check: "blueprint_configuration", status: "blocked", action: "edit_blueprint" }));
   });
 
   it("本地 OpenChatCut 卡片视频通过 A/B-roll 注册检查且不要求凭据", () => {
@@ -393,8 +395,8 @@ describe("runtime preflight", () => {
     expect(createRuntimePreflight([capability]).checks).toContainEqual(expect.objectContaining({ capability: "soundtrack_generation", check: "tool_permission", status: "passed", scope: "worker" }));
   });
 
-  it("真实缺少 Worker 文件权限时阻止执行并指向环境管理员", () => {
-    expect(createRuntimePreflight([{ capability: "custom_worker", provider: "codex", model: "model", promptVersion: "v1", allowedTools: ["read"] }]).checks).toContainEqual(expect.objectContaining({ check: "tool_permission", status: "blocked", action: "contact_environment_admin", scope: "worker" }));
+  it("未注册能力先阻止执行，不继续假设 Provider 能执行", () => {
+    expect(createRuntimePreflight([{ capability: "custom_worker", provider: "codex", model: "model", promptVersion: "v1", allowedTools: ["read"] }]).checks).toContainEqual(expect.objectContaining({ check: "capability_registration", status: "unavailable", action: "contact_environment_admin", scope: "worker" }));
   });
 
   it("不把未注册的 provider 当作可用运行路径", () => {

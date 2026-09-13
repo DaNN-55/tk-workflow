@@ -1,5 +1,6 @@
 import type { Json } from "../lib/database.types";
-import { adapterRegistration, executionPathKeys, isOwnerManagedConnection, localAdapterRegistrationsForCapability, mediaCapabilityForKey, mediaCapabilityKeys, type ExecutionPath, type MediaCapabilityKey } from "../worker/adapterRegistry";
+import { mediaCapabilityForKey, mediaCapabilityKeys, type MediaCapabilityKey } from "../worker/productionCapabilities";
+import { executionPathKeys, registeredAdapters, type ExecutionPath } from "../worker/registeredAdapters";
 
 type JsonObject = Record<string, Json | undefined>;
 type ExecutorForm = { provider: string; adapter?: string; harnessId?: string; model: string; promptVersion: string };
@@ -121,12 +122,10 @@ function formMediaAdapter(_key: MediaAdapterKey, value: Json | undefined, fallba
   const executor = objectValue(mediaAdapter.executor);
   const allowedTools = stringArray(mediaAdapter.allowed_tools);
   const visibleAllowedTools = allowedTools.filter((tool) => visibleToolKeys.has(tool));
-  const registration = adapterRegistration(stringValue(executor.provider), stringValue(executor.adapter));
   const configuredPath = stringValue(mediaAdapter.execution_path);
-  const executionPath = executionPathKeys.includes(configuredPath as ExecutionPath)
-    ? configuredPath as ExecutionPath
-    : registration?.requiresNetwork ? "external" : "";
-  const effectiveAllowedTools = registration && fallbackAllowedTools.length ? fallbackAllowedTools : visibleAllowedTools;
+  const executionPath = executionPathKeys.includes(configuredPath as ExecutionPath) ? configuredPath as ExecutionPath : "";
+  const resolved = registeredAdapters.resolve({ capability: mediaCapabilityForKey(_key).capability, executionPath, provider: stringValue(executor.provider), adapter: stringValue(executor.adapter) });
+  const effectiveAllowedTools = resolved.kind === "registered" && fallbackAllowedTools.length ? fallbackAllowedTools : visibleAllowedTools;
   return {
     ...(executionPath ? { executionPath } : {}),
     provider: stringValue(executor.provider),
@@ -173,22 +172,14 @@ export function validateMediaAdapter(key: MediaAdapterKey, form: MediaAdapterFor
 }
 
 function validateRegisteredMediaConnection(label: string, key: MediaAdapterKey, form: MediaAdapterForm, options: { availableExternalConnectionVersionIds?: readonly string[] }): void {
-  const registration = adapterRegistration(form.provider.trim(), form.adapter.trim());
-  if (form.executionPath === "local") {
-    const localRegistration = localAdapterRegistrationsForCapability(mediaCapabilityForKey(key).capability).find((candidate) => candidate.provider === form.provider.trim() && candidate.id === form.adapter.trim());
-    if (!localRegistration) throw new Error(`${label}没有已部署且可用的本地 Adapter。`);
-    if (!localRegistration.modelCatalog.includes(form.model.trim())) throw new Error(`${label}模型必须从本地 Adapter 目录选择。`);
-    if (!localRegistration.presetCatalog.includes(form.promptVersion.trim())) throw new Error(`${label}预设必须从本地 Adapter 目录选择。`);
-    return;
-  }
-  if (!registration || registration.capability !== mediaCapabilityForKey(key).capability || !registration.requiresNetwork) throw new Error(`${label}必须选择已注册的外部 Adapter。`);
-  if (!registration.modelCatalog?.includes(form.model.trim())) throw new Error(`${label}模型必须从 Adapter 目录选择。`);
-  if (!registration.presetCatalog?.includes(form.promptVersion.trim())) throw new Error(`${label}预设必须从 Adapter 目录选择。`);
+  const resolved = registeredAdapters.resolve({ capability: mediaCapabilityForKey(key).capability, executionPath: form.executionPath, provider: form.provider.trim(), adapter: form.adapter.trim(), model: form.model.trim(), preset: form.promptVersion.trim() });
+  if (resolved.kind !== "registered") throw new Error(`${label}${resolved.kind === "invalid" ? resolved.detail : "必须选择已注册的 Adapter。"}`);
+  const registration = resolved.choice;
+  if (form.executionPath === "local") return;
   const credentialRef = form.credentialRef.trim();
-  const dynamicConnection = isOwnerManagedConnection(form.provider.trim(), form.adapter.trim()) && isUuid(credentialRef);
+  const dynamicConnection = registration.connection.kind === "owner_managed" && isUuid(credentialRef);
   if (dynamicConnection && options.availableExternalConnectionVersionIds && !options.availableExternalConnectionVersionIds.includes(credentialRef)) throw new Error(`${label}必须选择当前且已验证的外部连接版本。`);
-  if (registration.connections.length && !registration.connections.some((connection) => connection.credentialRef === credentialRef) && !dynamicConnection) throw new Error(`${label}必须选择可用的外部连接。`);
-  if (isOwnerManagedConnection(form.provider.trim(), form.adapter.trim()) && !dynamicConnection) throw new Error(`${label}必须选择可用的外部连接。`);
+  if (registration.connection.kind === "owner_managed" && !dynamicConnection) throw new Error(`${label}必须选择可用的外部连接。`);
 }
 
 function isUuid(value: string): boolean {

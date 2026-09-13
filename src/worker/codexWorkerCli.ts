@@ -22,7 +22,7 @@ import { createHash } from "node:crypto";
 import { executeOpenChatCutRender } from "./openchatcutRenderer.js";
 import { durationToleranceSeconds, videoDurationMeetsMinimum } from "./durationDecision.js";
 import { readTaskIdArgument } from "./taskClaimArguments.js";
-import { createRuntimePreflight, credentialEnvironmentForReference, localAdapterReadinessFromCommands, runtimeCapabilityFromTask, runtimeCommandArguments, runtimeCommandForProvider, runtimeCommandInvocation } from "./runtimePreflight.js";
+import { createRuntimePreflight, credentialEnvironmentForReference, localAdapterReadinessFromCommands, runtimeCapabilityFromTask, runtimeCommandArguments, runtimeCommandInvocation } from "./runtimePreflight.js";
 import { probeCodexModel, probeProviderConnection } from "./runtimeProbes.js";
 import { runLocalWhisperXAlignment } from "./whisperxAlignment.js";
 
@@ -196,7 +196,7 @@ async function preflightTask(taskPackage: WorkerTaskPackage): Promise<WorkerPref
   const connectionModel = imageGeneration?.model ?? taskPackage.model;
   const capabilities = [capability, ...(imageGeneration ? [{ capability: "static_visual_generation", provider: connectionProvider, adapter: connectionAdapter, model: connectionModel, promptVersion: taskPackage.promptVersion, allowedTools: taskPackage.allowedTools, credentialRef: imageGeneration.credentialRef }] : [])];
   const credential = credentialEnvironmentForReference(connectionProvider, connectionAdapter, connectionRef);
-  const command = runtimeCommandForProvider(taskPackage.provider);
+  const command = capability.command;
   const commandStatus = command ? await workerCommandStatus(command) : undefined;
   const commands = command && commandStatus ? { [command]: commandStatus } : undefined;
   const localAdapters = commands ? localAdapterReadinessFromCommands(capabilities, commands) : undefined;

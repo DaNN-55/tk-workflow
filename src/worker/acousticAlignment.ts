@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { AcousticAlignmentCapabilities } from "./adapterRegistry.js";
+import type { AcousticAlignmentCapabilities } from "./registeredAdapters.js";
 import type { AcousticAlignmentCandidate, AcousticAlignmentResult } from "./acousticAlignmentContract.js";
 
 export { acousticAlignmentGranularities, acousticAlignmentMethods, acousticAlignmentStatuses, isValidAcousticAlignmentResult } from "./acousticAlignmentContract.js";

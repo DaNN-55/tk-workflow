@@ -1,5 +1,6 @@
 import { workerPreflightVersion, type WorkerPreflightCheck, type WorkerPreflightResult, type WorkerPreflightStatus, type WorkerTaskPackage } from "./contracts.js";
-import { adapterRegistration, isOwnerManagedConnection, localAdapterReadinessKey, localAdapterRegistrationsForCapability, mediaCapabilityForCapability, mediaCapabilityForKey, mediaCapabilityKeys, registeredAdaptersForCapability, type ExecutionPath, type LocalAdapterRegistration } from "./adapterRegistry.js";
+import { mediaCapabilityForCapability, mediaCapabilityForKey, mediaCapabilityKeys } from "./productionCapabilities.js";
+import { registeredAdapters, type ExecutionPath, type RegisteredAdapterChoice } from "./registeredAdapters.js";
 import { workerRequiredTools } from "./runtimeConstraints.js";
 
 export interface RuntimeCapability {
@@ -38,14 +39,9 @@ export interface RuntimePreflightEnvironment {
 
 export type ResolvedRuntimeCapability =
   | { kind: "configuration_error"; capability: RuntimeCapability; error: string }
-  | { kind: "local_adapter"; capability: RuntimeCapability; registration?: LocalAdapterRegistration; readinessKey: string }
+  | { kind: "local_adapter"; capability: RuntimeCapability; registration: RegisteredAdapterChoice; readinessKey: string }
   | { kind: "unregistered_execution"; capability: RuntimeCapability }
   | { kind: "registered_execution"; capability: RuntimeCapability };
-
-const legacyRegisteredAdapters = new Set([
-  "codex:codex",
-  "openchatcut:openchatcut",
-]);
 
 export function runtimeCapabilitiesFromBlueprintPolicy(policy: unknown, _seriesRules?: unknown, requiredMediaCapabilities?: readonly string[]): RuntimeCapability[] {
   const root = record(policy);
@@ -53,8 +49,8 @@ export function runtimeCapabilitiesFromBlueprintPolicy(policy: unknown, _seriesR
   const required = requiredMediaCapabilities ? new Set(requiredMediaCapabilities) : undefined;
   const capabilities: RuntimeCapability[] = [
     capabilityFromExecutor("storyboard_planning", record(executors.storyboard_planning), "codex", { adapter: true, promptHarness: true }),
-    { capability: "review_rendering", provider: "openchatcut", model: "openchatcut@0.2.14", promptVersion: "review-render-v1", allowedTools: ["read", "write"], command: "openchatcut" },
-    { capability: "final_rendering", provider: "openchatcut", model: "openchatcut@0.2.14", promptVersion: "final-render-v1", allowedTools: ["read", "write"], command: "openchatcut" },
+    { capability: "review_rendering", provider: "openchatcut", adapter: "openchatcut", model: "openchatcut@0.2.14", promptVersion: "review-render-v1", allowedTools: ["read", "write"], command: runtimeCommandForSelection({ capability: "review_rendering", provider: "openchatcut", adapter: "openchatcut" }) },
+    { capability: "final_rendering", provider: "openchatcut", adapter: "openchatcut", model: "openchatcut@0.2.14", promptVersion: "final-render-v1", allowedTools: ["read", "write"], command: runtimeCommandForSelection({ capability: "final_rendering", provider: "openchatcut", adapter: "openchatcut" }) },
   ];
 
   for (const key of mediaCapabilityKeys) {
@@ -80,7 +76,7 @@ export function runtimeCapabilitiesFromBlueprintPolicy(policy: unknown, _seriesR
       allowedTools: requiredTools(),
       ...(credentialRef ? { credentialRef } : {}),
       ...(credential ? { credential } : {}),
-      command: runtimeCommandForProvider(provider),
+      command: runtimeCommandForSelection({ capability: mediaCapability.capability, executionPath, provider, adapter }),
     });
   }
 
@@ -89,8 +85,9 @@ export function runtimeCapabilitiesFromBlueprintPolicy(policy: unknown, _seriesR
 
 export function runtimeCapabilityFromTask(taskPackage: WorkerTaskPackage): RuntimeCapability {
   const sharedPlanning = taskPackage.capability === "storyboard_planning";
-  const adapter = taskPackage.capability === "acoustic_alignment" ? "whisperx_local" : taskPackage.aRoll?.adapter ?? taskPackage.media?.adapter ?? (sharedPlanning ? taskPackage.promptHarness?.adapter : undefined);
-  const executionPath = adapter && localAdapterRegistrationsForCapability(taskPackage.capability).some((candidate) => candidate.provider === taskPackage.provider && candidate.id === adapter) ? "local" : undefined;
+  const adapter = taskPackage.capability === "acoustic_alignment" ? "whisperx_local" : taskPackage.aRoll?.adapter ?? taskPackage.media?.adapter ?? (taskPackage.provider === "codex" && (taskPackage.capability === "script_writing" || taskPackage.capability === "visual_planning") ? "codex" : sharedPlanning ? taskPackage.promptHarness?.adapter : undefined);
+  const adapterResolution = registeredAdapters.resolve({ capability: taskPackage.capability, provider: taskPackage.provider, adapter });
+  const executionPath = adapterResolution.kind === "registered" && adapterResolution.choice.executionPath === "local" ? "local" : undefined;
   return {
     capability: taskPackage.capability,
     ...(executionPath ? { executionPath } : {}),
@@ -103,24 +100,17 @@ export function runtimeCapabilityFromTask(taskPackage: WorkerTaskPackage): Runti
     allowedTools: taskPackage.allowedTools,
     ...(taskPackage.credentialRef ? { credentialRef: taskPackage.credentialRef } : {}),
     credential: credentialEnvironmentForReference(taskPackage.provider, adapter, taskPackage.credentialRef),
-    command: runtimeCommandForProvider(taskPackage.provider),
+    command: adapterResolution.kind === "registered" ? runtimeCommandForExecution(adapterResolution.choice.execution.kind) : undefined,
   };
 }
 
 export function resolveRuntimeCapability(capability: RuntimeCapability): ResolvedRuntimeCapability {
   const configurationError = configurationErrorFor(capability);
   if (configurationError) return { kind: "configuration_error", capability, error: configurationError };
-
-  if (capability.executionPath === "local") {
-    const registration = localAdapterRegistrationsForCapability(capability.capability).find((candidate) => candidate.provider === capability.provider && candidate.id === capability.adapter);
-    return { kind: "local_adapter", capability, registration, readinessKey: localAdapterReadinessKey(capability.provider, capability.adapter ?? "") };
-  }
-
-  const mediaCapability = mediaCapabilityForCapability(capability.capability);
-  const registered = mediaCapability?.workerAvailable === false ? false : capability.adapter
-    ? registeredAdaptersForCapability(capability.capability).some((registration) => registration.provider === capability.provider && registration.id === capability.adapter && registration.workerAvailable !== false) || (!mediaCapability && legacyRegisteredAdapters.has(`${capability.provider}:${capability.adapter}`))
-    : capability.provider === "codex" || capability.provider === "openchatcut" || capability.provider === "ffmpeg";
-  return registered ? { kind: "registered_execution", capability } : { kind: "unregistered_execution", capability };
+  const resolution = registeredAdapters.resolve({ capability: capability.capability, executionPath: capability.executionPath, provider: capability.provider, adapter: capability.adapter, model: capability.model, preset: capability.promptVersion });
+  if (resolution.kind !== "registered") return { kind: "unregistered_execution", capability };
+  if (resolution.choice.executionPath === "local") return { kind: "local_adapter", capability, registration: resolution.choice, readinessKey: resolution.choice.identityKey };
+  return { kind: "registered_execution", capability };
 }
 
 export function createRuntimePreflight(capabilities: RuntimeCapability[], environment: RuntimePreflightEnvironment = {}): WorkerPreflightResult {
@@ -133,10 +123,6 @@ export function createRuntimePreflight(capabilities: RuntimeCapability[], enviro
     }
 
     if (resolved.kind === "local_adapter") {
-      if (!resolved.registration || !resolved.registration.workerAvailable) {
-        checks.push({ adapter: capability.adapter, capability: capability.capability, check: "local_adapter_readiness", phase: "preflight", provider: capability.provider, status: "unavailable", reason: `当前 Worker 未部署或未注册本地 ${capability.provider}/${capability.adapter ?? "Adapter"}。`, action: "contact_environment_admin", scope: "worker" });
-        continue;
-      }
       if (environment.localAdapters && Object.prototype.hasOwnProperty.call(environment.localAdapters, resolved.readinessKey)) {
         checks.push({ ...dependencyCheck(capability.capability, "local_adapter_readiness", environment.localAdapters[resolved.readinessKey]), adapter: capability.adapter, provider: capability.provider });
       } else {
@@ -211,19 +197,15 @@ export function credentialEnvironmentForProvider(provider: string): string | und
   return undefined;
 }
 
-export function credentialEnvironmentForReference(provider: string, adapter: string | undefined, credentialRef: string | undefined): string | undefined {
+export function credentialEnvironmentForReference(provider: string, _adapter: string | undefined, credentialRef: string | undefined): string | undefined {
   if (isConnectionId(credentialRef)) return undefined;
-  const registration = adapter ? adapterRegistration(provider, adapter) : undefined;
-  if (registration) return registration.connections.find((connection) => connection.credentialRef === credentialRef)?.environmentVariable;
+  if (_adapter) return undefined;
   return credentialEnvironmentForProvider(provider);
 }
 
-export function runtimeCommandForProvider(provider: string): string | undefined {
-  if (provider === "codex") return "codex";
-  if (provider === "ffmpeg") return "ffmpeg";
-  if (provider === "openchatcut") return "openchatcut";
-  if (provider === "whisperx") return process.env.WHISPERX_PYTHON?.trim() || "python3";
-  return undefined;
+export function runtimeCommandForSelection(selection: { adapter?: string; capability: string; executionPath?: ExecutionPath | ""; provider?: string }): string | undefined {
+  const resolution = registeredAdapters.resolve(selection);
+  return resolution.kind === "registered" ? runtimeCommandForExecution(resolution.choice.execution.kind) : undefined;
 }
 
 export function runtimeCommandArguments(command: string): string[] {
@@ -239,7 +221,7 @@ export function runtimeCommandInvocation(command: string, argumentsList: string[
 export function localAdapterReadinessFromCommands(capabilities: readonly RuntimeCapability[], commands: Record<string, RuntimeDependencyStatus>): Record<string, RuntimeDependencyStatus> {
   return Object.fromEntries(capabilities.flatMap((capability) => {
     if (capability.executionPath !== "local" || !capability.adapter || !capability.command) return [];
-    return [[localAdapterReadinessKey(capability.provider, capability.adapter), commands[capability.command] ?? { available: false, detail: `本地 ${capability.command} 尚未完成当前 Worker 就绪探测。` }] as const];
+    return [[`${capability.provider}:${capability.adapter}`, commands[capability.command] ?? { available: false, detail: `本地 ${capability.command} 尚未完成当前 Worker 就绪探测。` }] as const];
   }));
 }
 
@@ -257,7 +239,7 @@ function capabilityFromExecutor(capability: string, executor: Record<string, unk
     ...(requirements.adapter ? { requiresAdapter: true } : {}),
     ...(requirements.promptHarness ? { requiresPromptHarness: true } : {}),
     allowedTools: requiredTools(),
-    command: runtimeCommandForProvider(provider),
+    command: runtimeCommandForSelection({ capability, provider, adapter }),
   };
 }
 
@@ -265,10 +247,10 @@ function configurationErrorFor(capability: RuntimeCapability): string | undefine
   if (mediaCapabilityForCapability(capability.capability) && capability.executionPath === "") return `能力 ${capability.capability} 缺少执行路径。`;
   if (!capability.provider || !capability.model || !capability.promptVersion) return `能力 ${capability.capability} 缺少 Provider、模型或 Prompt 版本。`;
   if (capability.requiresAdapter && !capability.adapter) return `能力 ${capability.capability} 缺少已注册 Adapter。`;
-  if (isOwnerManagedConnection(capability.provider, capability.adapter ?? "") && !isConnectionId(capability.credentialRef)) return `${capability.provider === "openai" ? "OpenAI Images" : capability.provider === "cloudflare" ? "Cloudflare Workers AI" : capability.provider === "google_tts" ? "Google TTS" : capability.provider === "volcengine_tts" ? "豆包语音" : capability.provider === "freesound" ? "Freesound" : "Pexels"} 必须选择已验证的外部连接版本。`;
+  const resolution = registeredAdapters.resolve({ capability: capability.capability, executionPath: capability.executionPath, provider: capability.provider, adapter: capability.adapter, model: capability.model, preset: capability.promptVersion });
+  if (resolution.kind === "invalid" && (resolution.code === "model_unsupported" || resolution.code === "preset_unsupported" || resolution.code === "execution_path_mismatch" || resolution.code === "capability_unsupported")) return resolution.detail;
+  if (resolution.kind === "registered" && resolution.choice.connection.kind === "owner_managed" && !isConnectionId(capability.credentialRef)) return `${capability.provider === "openai" ? "OpenAI Images" : capability.provider === "cloudflare" ? "Cloudflare Workers AI" : capability.provider === "google_tts" ? "Google TTS" : capability.provider === "volcengine_tts" ? "豆包语音" : capability.provider === "freesound" ? "Freesound" : "Pexels"} 必须选择已验证的外部连接版本。`;
   if (capability.requiresPromptHarness && !capability.promptHarnessId) return `能力 ${capability.capability} 缺少 Prompt Harness。`;
-  const registration = capability.adapter ? adapterRegistration(capability.provider, capability.adapter) : undefined;
-  if (registration?.connections.length && !registration.connections.some((connection) => connection.credentialRef === capability.credentialRef) && !isConnectionId(capability.credentialRef)) return `能力 ${capability.capability} 缺少可用的外部连接引用。`;
   return undefined;
 }
 
@@ -290,6 +272,14 @@ function requiredTools(): readonly string[] {
 
 function isConnectionId(value: string | undefined): boolean {
   return Boolean(value && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value));
+}
+
+function runtimeCommandForExecution(kind: RegisteredAdapterChoice["execution"]["kind"]): string | undefined {
+  if (kind === "codex") return "codex";
+  if (kind === "ffmpeg") return "ffmpeg";
+  if (kind === "openchatcut") return "openchatcut";
+  if (kind === "whisperx") return process.env.WHISPERX_PYTHON?.trim() || "python3";
+  return undefined;
 }
 
 function dependencyCheck(capability: string, check: string, dependency: RuntimeDependencyStatus): WorkerPreflightCheck {

@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { adapterRegistration } from "./adapterRegistry";
+import { registeredAdapters } from "./registeredAdapters";
 import { createRuntimePreflight, credentialEnvironmentForReference, runtimeCapabilitiesFromBlueprintPolicy } from "./runtimePreflight";
 
 describe("legacy Pexels connection references", () => {
   it("does not register an environment-variable fallback for Pexels", () => {
-    expect(adapterRegistration("pexels", "pexels_video")?.connections).toEqual([]);
+    expect(registeredAdapters.resolve({ capability: "b_roll_generation", provider: "pexels", adapter: "pexels_video" })).toMatchObject({ kind: "registered", choice: { connection: { kind: "owner_managed" } } });
     expect(credentialEnvironmentForReference("pexels", "pexels_video", "pexels-default")).toBeUndefined();
   });
 

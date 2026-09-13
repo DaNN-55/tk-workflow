@@ -9,7 +9,7 @@ import { mediaAdapterKeys } from "../platform/configurationFormValues";
 import type { LocalSystemStatusReport } from "../observability/SystemStatusPanel";
 import type { WorkerBlocker } from "../reviews/reviewSelectors";
 import type { WorkerPreflightCheck, WorkerPreflightResult } from "../worker/contracts";
-import { localAdapterProviderForCapability, localAdapterReadinessKey } from "../worker/adapterRegistry";
+import { registeredAdapters } from "../worker/registeredAdapters";
 
 type Account = Database["public"]["Tables"]["accounts"]["Row"];
 type Blueprint = Database["public"]["Tables"]["account_blueprint_versions"]["Row"];
@@ -167,8 +167,8 @@ export function AccountWorkspace({ account, accountEpisodeCount = 0, accounts, b
     ...(systemStatus?.dependencies.some((dependency) => dependency.name === "OpenChatCut" && dependency.state === "healthy") ? [["openchatcut:openchatcut_card_video", true] as const] : []),
     ...(blueprintPreflight?.checks ?? []).flatMap((check) => {
     if (check.check !== "local_adapter_readiness" || !check.adapter) return [];
-    const provider = check.provider ?? localAdapterProviderForCapability(check.capability, check.adapter);
-    return provider ? [[localAdapterReadinessKey(provider, check.adapter), check.status === "passed"] as const] : [];
+    const provider = check.provider ?? registeredAdapters.choicesFor({ capability: check.capability, executionPath: "local" }).find((choice) => choice.adapter === check.adapter)?.provider;
+    return provider ? [[`${provider}:${check.adapter}`, check.status === "passed"] as const] : [];
     }),
   ]);
   function leaveConfiguration(action: () => void) {

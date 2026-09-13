@@ -19,7 +19,7 @@ import { writeSafeAssetFile } from "./src/worker/controlledMediaExecutor";
 import { createPublishPackage, verifyPublishPackage } from "./src/publishing/publishPackage";
 import { loadPublishContext } from "./src/publishing/publishContext";
 import { coverImageExtension, coverInputPath } from "./src/publishing/coverImage";
-import { adapterRegistration } from "./src/worker/adapterRegistry";
+import { registeredAdapters } from "./src/worker/registeredAdapters";
 import { synthesizeGoogleTts, synthesizeVolcengineTts } from "./src/worker/mediaProviders";
 import { reviewRenderFromSnapshot, shotPreparationContractFromSnapshot } from "./src/worker/codexRunner";
 import { freezeOpenChatCutStudio, openOpenChatCutStudio } from "./src/worker/openchatcutStudio";
@@ -2050,8 +2050,8 @@ export function serveTtsVoicePreview(supabaseUrl: string | undefined, supabasePu
       const narration = policy.narration && typeof policy.narration === "object" && !Array.isArray(policy.narration) ? policy.narration as Record<string, unknown> : {};
       const assetRoot = typeof policy.asset_root === "string" ? policy.asset_root.trim() : "";
       if (!assetRoot) throw new Error("当前蓝图没有本地资产根目录。");
-      const registration = adapterRegistration(capability.provider, capability.adapter ?? capability.provider);
-      const catalog = registration?.voiceCatalog?.[languageCode];
+      const resolution = registeredAdapters.resolve({ capability: capability.capability, provider: capability.provider, adapter: capability.adapter });
+      const catalog = resolution.kind === "registered" ? resolution.choice.voiceCatalog?.[languageCode] : undefined;
       if (!catalog || !catalog.includes(voice)) throw new Error("所选语言或音色不在当前 TTS 执行器目录中。");
       const apiKey = await localWorkerSecretForCapability(capability, episode.account_id);
       if (!apiKey) { response.statusCode = 503; response.end("当前 TTS 凭据不可用。"); return; }

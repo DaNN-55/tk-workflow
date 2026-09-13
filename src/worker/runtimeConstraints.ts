@@ -1,14 +1,6 @@
-export const workerRequiredTools = ["read", "write"] as const;
+import { registeredAdapters } from "./registeredAdapters.js";
 
-const adapterSafetyLimits: Record<string, number> = {
-  pexels_video: 3,
-  google_tts: 2,
-  volcengine_tts: 2,
-  freesound_preview: 1,
-  openai_images: 1,
-  workers_ai_images: 1,
-  openchatcut_card_video: 1,
-};
+export const workerRequiredTools = ["read", "write"] as const;
 
 export interface WorkerRuntimeConstraints {
   adapterSafetyLimit: number;
@@ -17,8 +9,9 @@ export interface WorkerRuntimeConstraints {
   workerCapacity: number;
 }
 
-export function workerRuntimeConstraints({ adapter, providerOrConnectionLimit = null, workerCapacity = 1 }: { adapter?: string; providerOrConnectionLimit?: number | null; workerCapacity?: number }): WorkerRuntimeConstraints {
-  const adapterSafetyLimit = adapterSafetyLimits[adapter ?? ""] ?? 1;
+export function workerRuntimeConstraints({ adapter, capability, provider, providerOrConnectionLimit = null, workerCapacity = 1 }: { adapter?: string; capability?: string; provider?: string; providerOrConnectionLimit?: number | null; workerCapacity?: number }): WorkerRuntimeConstraints {
+  const resolution = registeredAdapters.resolve({ adapter, capability: capability ?? "", provider });
+  const adapterSafetyLimit = resolution.kind === "registered" ? resolution.choice.execution.safetyLimit : 1;
   const safeWorkerCapacity = Number.isInteger(workerCapacity) && workerCapacity > 0 ? workerCapacity : 1;
   const safeProviderLimit = providerOrConnectionLimit !== null && Number.isInteger(providerOrConnectionLimit) && providerOrConnectionLimit > 0 ? providerOrConnectionLimit : null;
   return {

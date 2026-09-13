@@ -1,7 +1,8 @@
 import type { Json } from "../lib/database.types";
 import type { WorkerPreflightAction, WorkerPreflightResult, WorkerPreflightStatus } from "../worker/contracts";
 import { blueprintPolicyToForm, type ConfigurableMediaAdapterKey } from "./configurationFormValues";
-import { externalAdapterForMediaCapability, mediaCapabilityForKey } from "../worker/adapterRegistry";
+import { mediaCapabilityForKey } from "../worker/productionCapabilities";
+import { registeredAdapters } from "../worker/registeredAdapters";
 
 export type ExternalConnectionStatus = {
   action: WorkerPreflightAction;
@@ -16,7 +17,7 @@ export type ExternalConnectionStatus = {
 
 export function externalConnectionStatuses(policy: Json, preflight: WorkerPreflightResult | null): ExternalConnectionStatus[] {
   const form = blueprintPolicyToForm(policy);
-  return (form.enabledMediaAdapters ?? []).filter((key) => externalAdapterForMediaCapability(key, form.mediaAdapters[key].provider, form.mediaAdapters[key].adapter)).map((key) => {
+  return (form.enabledMediaAdapters ?? []).filter((key) => registeredAdapters.resolve({ capability: mediaCapabilityForKey(key).capability, executionPath: "external", provider: form.mediaAdapters[key].provider, adapter: form.mediaAdapters[key].adapter }).kind === "registered").map((key) => {
     const capability = mediaCapabilityForKey(key).capability;
     const checks = preflight?.checks.filter((check) => check.capability === capability) ?? [];
     const failedCheck = checks.find((check) => check.status !== "passed");

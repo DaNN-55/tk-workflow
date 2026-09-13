@@ -1,4 +1,4 @@
-import { adapterRegistration } from "./adapterRegistry.js";
+import { registeredAdapters } from "./registeredAdapters.js";
 import type { StoryboardStructureRevision } from "./storyboardRevision.js";
 import { isShotDurationDecision, type ShotDurationDecision } from "./durationDecision.js";
 import { isValidShotComposition, normalizeShotComposition, shotCompositionTiming, shotTransitionModes, type ShotComposition, type ShotTransitionMode } from "../shotComposition.js";
@@ -446,7 +446,7 @@ export function createWorkerTaskPackage(input: WorkerTaskPackageInput): WorkerTa
     input.visualAssetPreparation.externalInputs.forEach(assertArtifactManifest);
     const imageGeneration = input.visualAssetPreparation.imageGeneration;
     if (imageGeneration && (!isNonEmptyString(imageGeneration.provider) || !isNonEmptyString(imageGeneration.adapter) || !isNonEmptyString(imageGeneration.model) || !isConnectionId(imageGeneration.credentialRef))) throw new Error("图片 Adapter 配置无效，必须使用连接版本 ID。");
-    if (input.visualAssetPreparation.externalInputs.length === 0 && (!imageGeneration || adapterRegistration(imageGeneration.provider, imageGeneration.adapter)?.capability !== "static_visual_generation")) {
+    if (input.visualAssetPreparation.externalInputs.length === 0 && (!imageGeneration || registeredAdapters.resolve({ capability: "static_visual_generation", provider: imageGeneration.provider, adapter: imageGeneration.adapter }).kind !== "registered")) {
       throw new Error(missingVisualAssetAdapterMessage);
     }
   }

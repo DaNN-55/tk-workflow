@@ -14,7 +14,7 @@ import {
   type ShotPreparationContract,
   validateWorkerResult,
 } from "./contracts.js";
-import { isOwnerManagedConnection } from "./adapterRegistry.js";
+import { registeredAdapters } from "./registeredAdapters.js";
 import { validateStoryboardManifest } from "./contracts.js";
 import type { StoryboardStructureRevision } from "./storyboardRevision.js";
 import { defaultAllowedDurationFrames, defaultDurationFrameRate, shotDurationDecisionFromJson } from "./durationDecision.js";
@@ -847,7 +847,8 @@ function executionPreflightCheck(taskPackage: WorkerTaskPackage, error: unknown)
   const isOpenAiStaticVisual = (taskPackage.provider === "openai" && taskPackage.media?.adapter === "openai_images") || (imageGeneration?.provider === "openai" && imageGeneration.adapter === "openai_images");
   const isCloudflareStaticVisual = (taskPackage.provider === "cloudflare" && taskPackage.media?.adapter === "workers_ai_images") || (imageGeneration?.provider === "cloudflare" && imageGeneration.adapter === "workers_ai_images");
   const managedAdapter = taskPackage.media?.adapter ?? taskPackage.aRoll?.adapter;
-  const isManagedConnection = isOpenAiStaticVisual || isCloudflareStaticVisual || isOwnerManagedConnection(taskPackage.provider, managedAdapter ?? "");
+  const adapterResolution = registeredAdapters.resolve({ capability: taskPackage.capability, provider: taskPackage.provider, adapter: managedAdapter });
+  const isManagedConnection = isOpenAiStaticVisual || isCloudflareStaticVisual || (adapterResolution.kind === "registered" && adapterResolution.choice.connection.kind === "owner_managed");
   const capability = isOpenAiStaticVisual || isCloudflareStaticVisual ? "static_visual_generation" : taskPackage.capability;
   if (isOpenAiStaticVisual && /HTTP (400|404)/i.test(detail)) {
     return { capability, check: "model_permission", phase: "execution", status: "unavailable", reason: detail, action: "edit_blueprint", scope: "blueprint" };

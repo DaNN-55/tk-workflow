@@ -1,4 +1,4 @@
-import { mediaCapabilityKeyForCapability, type MediaCapabilityKey } from "../worker/adapterRegistry";
+import { mediaCapabilityKeyForCapability, type MediaCapabilityKey } from "../worker/productionCapabilities";
 import type { WorkerBlocker } from "./reviewSelectors";
 
 export type RepairTarget =
